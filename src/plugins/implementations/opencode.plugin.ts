@@ -48,6 +48,7 @@
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { getErrorMessage } from '../../utils/error-message';
+import { logger } from '../../utils/logger';
 import type {
   CodingPlugin,
   CodingPluginCallbacks,
@@ -327,14 +328,14 @@ export class OpenCodePlugin implements CodingPlugin {
       const health = (await res.json()) as { healthy?: boolean };
       if (health?.healthy) {
         const client = createOpencodeClient({ baseUrl: existingUrl, headers: authHeaders });
-        console.log(`[opencode] Connected to existing server at ${existingUrl}`);
+        logger.info(`[opencode] Connected to existing server at ${existingUrl}`);
         this.client = client;
         this.server = null; // We didn't start it, so nothing to close
         this.serverPort = existingPort;
         return;
       }
     } catch {
-      console.log(`[opencode] No existing server at ${existingUrl}, starting a new one...`);
+      logger.info(`[opencode] No existing server at ${existingUrl}, starting a new one...`);
     }
 
     // Fall back to starting a new server on a random port
@@ -487,7 +488,7 @@ export class OpenCodePlugin implements CodingPlugin {
     let sessionId = this.conversationSessions.get(conversationId);
     if (!sessionId) {
       try {
-        console.log(`[opencode] Creating session for conversation=${conversationId.substring(0, 8)}`);
+        logger.info(`[opencode] Creating session for conversation=${conversationId.substring(0, 8)}`);
         const sessionResult = await this.client.session.create({
           body: { title: `mia-${conversationId.substring(0, 8)}` },
         });
@@ -499,7 +500,7 @@ export class OpenCodePlugin implements CodingPlugin {
         }
         sessionId = session.id;
         this.conversationSessions.set(conversationId, sessionId);
-        console.log(`[opencode] Session created: ${sessionId}`);
+        logger.info(`[opencode] Session created: ${sessionId}`);
       } catch (err) {
         const msg = `Failed to create opencode session: ${getErrorMessage(err)}`;
         callbacks.onError(new PluginError(msg, PluginErrorCode.SESSION_ERROR, this.name, err), taskId);

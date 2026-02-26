@@ -19,6 +19,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { PluginDispatchResult } from './types';
+import { logger } from '../utils/logger';
 
 /**
  * A lightweight dispatch function the MemoryExtractor uses to send an
@@ -196,7 +197,7 @@ export class MemoryExtractor {
       rawFacts = await this._callExtractor(prompt, result.output);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[MemoryExtractor] Extraction failed: ${msg}`);
+      logger.warn(`[MemoryExtractor] Extraction failed: ${msg}`);
       return { facts: [], stored: 0, skipped: 0, reason: `dispatch error: ${msg}` };
     }
 
@@ -226,13 +227,13 @@ export class MemoryExtractor {
           stored++;
         }
       } catch (err: unknown) {
-        console.warn(`[MemoryExtractor] Failed to store fact: ${err instanceof Error ? err.message : String(err)}`);
+        logger.warn(`[MemoryExtractor] Failed to store fact: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
     if (stored > 0) {
       saveDedupCache(cache);
-      console.log(`[MemoryExtractor] Stored ${stored} new fact(s) from conv ${conversationId.substring(0, 8)} (${skipped} duplicate(s) skipped)`);
+      logger.info(`[MemoryExtractor] Stored ${stored} new fact(s) from conv ${conversationId.substring(0, 8)} (${skipped} duplicate(s) skipped)`);
     }
 
     return { facts: extracted, stored, skipped };

@@ -11,6 +11,7 @@
  *   3. Volatile context (conversation, tone, previous results) — changes every dispatch
  */
 
+import { logger } from '../utils/logger';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
@@ -381,7 +382,7 @@ export function formatHandoffPrompt(context: HandoffContext, opts?: ContextBudge
   // Warn when the budget is tight enough that truncation occurred
   if (sectionsSkipped > 0) {
     const pct = ((usedTokens / budget) * 100).toFixed(1);
-    console.warn(`[context-builder] token budget: ${usedTokens.toLocaleString()}/${budget.toLocaleString()} tokens used (${pct}%) — ${sectionsSkipped} section(s) truncated or skipped`);
+    logger.warn(`[context-builder] token budget: ${usedTokens.toLocaleString()}/${budget.toLocaleString()} tokens used (${pct}%) — ${sectionsSkipped} section(s) truncated or skipped`);
     parts.push(`⚠ Context budget reached (${pct}% of ${(windowSize / 1000).toFixed(0)}k window used). Some lower-priority context was omitted.`);
   }
 

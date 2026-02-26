@@ -6,6 +6,7 @@
  */
 
 import type { PluginContext, PluginDispatchResult } from './types';
+import { logger } from '../utils/logger';
 
 export interface VerificationCheck {
   name: string;
@@ -80,7 +81,7 @@ export class PostDispatchVerifier {
 
     // Retry once if enabled, checks failed, and a retry callback was provided
     if (!verificationResult.passed && this.opts.retryOnFailure && retryDispatch) {
-      console.warn(`[Verifier] Checks failed (${verificationResult.summary}), retrying dispatch once…`);
+      logger.warn(`[Verifier] Checks failed (${verificationResult.summary}), retrying dispatch once…`);
       try {
         const retryResult = await retryDispatch();
         const retryVerification = await this._runChecks(originalPrompt, retryResult);
@@ -90,7 +91,7 @@ export class PostDispatchVerifier {
         };
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[Verifier] Retry dispatch failed: ${msg}`);
+        logger.warn(`[Verifier] Retry dispatch failed: ${msg}`);
       }
     }
 

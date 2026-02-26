@@ -329,6 +329,12 @@ export class ContextPreparer {
     if (!conversationId || conversationId === 'default') {
       return { summary: undefined, turnCount: 0 };
     }
+    // When the caller explicitly set conversationHistoryLimit to 0, skip the
+    // message store entirely.  CLI one-shot commands (standup, ask, commit…)
+    // use this to avoid hitting the uninitialised message store.
+    if (this.opts.conversationHistoryLimit === 0) {
+      return { summary: undefined, turnCount: 0 };
+    }
     try {
       // When summarization is enabled and a dispatch function is available,
       // fetch a larger window so we have older messages to compact.  If the

@@ -32,6 +32,7 @@
 import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { getErrorMessage } from '../utils/error-message.js';
+import { logger } from '../utils/logger.js';
 import type {
   CodingPlugin,
   CodingPluginCallbacks,
@@ -472,7 +473,7 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
         const errorMsg =
           `[BaseSpawnPlugin] stdout buffer overflow for task ${taskId} — ` +
           `discarding ${bufRef.value.length} bytes of unframed data`;
-        console.warn(errorMsg);
+        logger.warn(errorMsg);
         const task = this.tasks.get(taskId);
         if (task && task.status === 'running') {
           task.status = 'error';

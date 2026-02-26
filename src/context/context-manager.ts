@@ -13,6 +13,7 @@
 
 type ChatCompletionMessageParam = { role: string; content: unknown; [key: string]: unknown };
 
+import { logger } from '../utils/logger';
 import { gatherCodebaseContext, formatContextForPrompt, type CodebaseContext } from '../utils/codebase_context';
 import { loadPersonality, formatPersonalityForPrompt } from '../utils/personality';
 import { loadWorkspaceFiles, formatWorkspaceContext } from '../utils/workspace_context';
@@ -281,7 +282,7 @@ export class ContextManager {
 
     if (sectionsSkipped > 0) {
       const pct = ((usedTokens / budget) * 100).toFixed(1);
-      console.warn(
+      logger.warn(
         `[context-manager] token budget: ${usedTokens.toLocaleString()}/${budget.toLocaleString()} tokens used (${pct}%) — ${sectionsSkipped} section(s) truncated or skipped`
       );
     }

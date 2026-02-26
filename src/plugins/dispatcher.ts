@@ -32,7 +32,7 @@ import type { ContextPreparer } from './context-preparer';
 import type { TraceLogger } from './trace-logger';
 import type { PostDispatchVerifier } from './verifier';
 import type { MemoryExtractor } from './memory-extractor';
-import { logTimestamp } from '../utils/ansi';
+import { logger } from '../utils/logger';
 
 export interface DispatcherOptions {
   /** Partial dispatch options to apply to every dispatch */
@@ -201,7 +201,7 @@ export class PluginDispatcher {
         const latencyMs = Date.now() - startedAt;
 
         this.traceLogger.recordEvent(traceId, 'tool_result', { name, result, taskId, latencyMs });
-        console.log(`${logTimestamp()} [DEBUG  ] [tool:${name}] result in ${latencyMs}ms`);
+        logger.debug({ tool: name, latencyMs }, `[tool:${name}] result in ${latencyMs}ms`);
         externalCallbacks?.onToolResult?.(name, result, taskId);
       },
 
@@ -241,7 +241,7 @@ export class PluginDispatcher {
       };
     }
 
-    console.log(`${logTimestamp()} [INFO   ] [plugin:${plugin.name}] Dispatch complete — success=${result.success} duration=${result.durationMs}ms`);
+    logger.info({ plugin: plugin.name, success: result.success, durationMs: result.durationMs }, `[plugin:${plugin.name}] Dispatch complete — success=${result.success} duration=${result.durationMs}ms`);
 
     // Capture git changes made during dispatch (non-blocking, failure-silent)
     if (result.success && workDir) {
@@ -272,7 +272,7 @@ export class PluginDispatcher {
         .sort((a, b) => b.avgMs - a.avgMs)
         .map(t => `${t.name}(avg=${t.avgMs}ms,calls=${t.calls})`)
         .join(' ');
-      console.log(`${logTimestamp()} [DEBUG  ] [tool-latency] ${parts}`);
+      logger.debug(`[tool-latency] ${parts}`);
     }
 
     // Auto-extract memory facts (fire-and-forget, skip for utility dispatches to prevent loops)
@@ -281,7 +281,7 @@ export class PluginDispatcher {
       this.memoryExtractor
         .extractAndStore(prompt, result, conversationId, workingDir)
         .catch((err: unknown) => {
-          console.warn(`${logTimestamp()} [WARN   ] [MemoryExtractor] Background extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+          logger.warn({ err }, `[MemoryExtractor] Background extraction failed: ${err instanceof Error ? err.message : String(err)}`);
         });
     }
 
@@ -332,7 +332,7 @@ export class PluginDispatcher {
     const ctxSummaryLen = context.conversationSummary?.length ?? 0;
     const ctxMemLen = context.memoryFacts.join('\n').length;
     const ctxInstrLen = context.projectInstructions.length;
-    console.log(`${logTimestamp()} [DEBUG  ] [context] conv=${conversationId} summary=${ctxSummaryLen} memory=${ctxMemLen} instructions=${ctxInstrLen}`);
+    logger.debug({ conversationId, summaryLen: ctxSummaryLen, memoryLen: ctxMemLen, instructionsLen: ctxInstrLen }, `[context] conv=${conversationId} summary=${ctxSummaryLen} memory=${ctxMemLen} instructions=${ctxInstrLen}`);
 
     let lastFailureResult: PluginDispatchResult | undefined;
 
@@ -341,9 +341,9 @@ export class PluginDispatcher {
       const isFallback = i > 0;
 
       if (isFallback) {
-        console.log(`${logTimestamp()} [INFO   ] [plugin:${plugin.name}] Trying fallback plugin "${plugin.name}" (primary: "${activePlugin.name}")`);
+        logger.info({ plugin: plugin.name, primary: activePlugin.name }, `[plugin:${plugin.name}] Trying fallback plugin "${plugin.name}" (primary: "${activePlugin.name}")`);
       } else {
-        console.log(`${logTimestamp()} [INFO   ] [plugin:${plugin.name}] Dispatching prompt (${prompt.length} chars) to plugin "${plugin.name}"`);
+        logger.info({ plugin: plugin.name, promptLen: prompt.length }, `[plugin:${plugin.name}] Dispatching prompt (${prompt.length} chars) to plugin "${plugin.name}"`);
       }
 
       // Pre-flight availability check — fail fast with a helpful install hint.
@@ -354,7 +354,7 @@ export class PluginDispatcher {
           ? `Fallback plugin '${plugin.name}' is also not available. ${hint}`
           : `Plugin '${plugin.name}' is not available. ${hint}`;
 
-        console.warn(`${logTimestamp()} [WARN   ] [plugin:${plugin.name}] ${errorMsg}`);
+        logger.warn({ plugin: plugin.name }, `[plugin:${plugin.name}] ${errorMsg}`);
 
         lastFailureResult = {
           taskId: `unavailable-${Date.now()}`,
@@ -365,7 +365,7 @@ export class PluginDispatcher {
         };
 
         if (i < candidates.length - 1) {
-          console.log(`${logTimestamp()} [INFO   ] Fallback chain: trying next candidate (${i + 2}/${candidates.length})`);
+          logger.info(`Fallback chain: trying next candidate (${i + 2}/${candidates.length})`);
           continue;
         }
 
@@ -387,7 +387,7 @@ export class PluginDispatcher {
 
       // Optionally fallback on runtime dispatch errors too.
       if (!result.success && fallbackOnError && i < candidates.length - 1) {
-        console.warn(`${logTimestamp()} [WARN   ] [plugin:${plugin.name}] Dispatch failed (onDispatchError fallback), trying next candidate`);
+        logger.warn({ plugin: plugin.name }, `[plugin:${plugin.name}] Dispatch failed (onDispatchError fallback), trying next candidate`);
         lastFailureResult = result;
         continue;
       }

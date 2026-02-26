@@ -5,11 +5,12 @@
  */
 
 import { getScheduler } from '../scheduler/index';
+import { logger } from '../utils/logger';
 
 export async function setupContextRefresh(): Promise<void> {
   const scheduler = getScheduler();
   if (!scheduler) {
-    console.log('[Daemon] Scheduler not initialized, skipping context refresh setup');
+    logger.info('[Daemon] Scheduler not initialized, skipping context refresh setup');
     return;
   }
 
@@ -33,8 +34,8 @@ export async function setupContextRefresh(): Promise<void> {
       '0 */2 * * *',
       'Refresh workspace context snapshots for all known projects. Scan git state, recent files, and project structure.',
     );
-    console.log('[Daemon] Context refresh scheduled (every 2 hours)');
+    logger.info('[Daemon] Context refresh scheduled (every 2 hours)');
   } catch (err) {
-    console.error('[Daemon] Failed to schedule context refresh:', err);
+    logger.error({ err }, '[Daemon] Failed to schedule context refresh');
   }
 }

@@ -4,6 +4,8 @@
  * Classifies errors into categories and provides intelligent retry strategies
  */
 
+import { logger } from './logger';
+
 export enum ErrorType {
   /** Transient errors that might succeed on retry */
   TRANSIENT = 'transient',
@@ -182,7 +184,7 @@ export async function executeWithRetry<T>(
         finalConfig.maxDelayMs
       );
       
-      console.log(`[tool-retry] ${toolName} failed (attempt ${attempt}/${finalConfig.maxAttempts}), retrying in ${delay}ms...`);
+      logger.info(`[tool-retry] ${toolName} failed (attempt ${attempt}/${finalConfig.maxAttempts}), retrying in ${delay}ms...`);
       
       await new Promise(resolve => setTimeout(resolve, delay));
     }
