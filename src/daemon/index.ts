@@ -473,9 +473,12 @@ async function main() {
     log,
     performRestart,
     () => {
-      const plugin = pluginDispatcher.getActivePlugin();
-      const count = plugin.getRunningTaskCount();
-      return { running: count > 0, count };
+      // Use queue.isProcessing() instead of plugin.getRunningTaskCount() so
+      // that background scheduler dispatches (which bypass the queue) are NOT
+      // reported as "running" to the mobile app.  This prevents the typing
+      // indicator from appearing during scheduled tasks.
+      const running = queue.isProcessing();
+      return { running, count: running ? 1 : 0 };
     },
   );
 
