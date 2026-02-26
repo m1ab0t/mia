@@ -44,6 +44,7 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
       '-p', prompt,
       '--output-format', 'stream-json',
       '--verbose',
+      '--include-partial-messages',
     ];
 
     if (isResume && sessionId) {
@@ -91,6 +92,13 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
    */
   private taskToolCalls = new Map<string, string[]>();
 
+  /**
+   * Tasks that have received at least one partial streaming token.
+   * Used to suppress the final non-partial `assistant` event text emission
+   * (which would be a duplicate of everything already streamed).
+   */
+  private taskHasStreamedTokens = new Set<string>();
+
   protected _handleMessage(
     taskId: string,
     rawMsg: unknown,
@@ -106,13 +114,28 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
 
       case 'assistant': {
         const content = (msg.message as Record<string, unknown>)?.content;
+        // `partial: true` is set by --include-partial-messages on streaming chunks.
+        // `partial: false` (or absent) means this is the final assembled message.
+        const isPartial = msg.partial === true;
+
         if (!Array.isArray(content)) break;
 
         for (const block of content) {
           const b = block as Record<string, unknown>;
           if (b.type === 'text' && b.text) {
-            callbacks.onToken(b.text as string, taskId);
-          } else if (b.type === 'tool_use') {
+            if (isPartial) {
+              // Real-time streaming delta — emit immediately.
+              this.taskHasStreamedTokens.add(taskId);
+              callbacks.onToken(b.text as string, taskId);
+            } else if (!this.taskHasStreamedTokens.has(taskId)) {
+              // No partial events seen (flag absent or first-ever event):
+              // emit the whole block as a single token for backward compat.
+              callbacks.onToken(b.text as string, taskId);
+            }
+            // If partial=false but we already streamed: skip — the full text
+            // was already forwarded piece by piece.
+          } else if (b.type === 'tool_use' && !isPartial) {
+            // Tool-call blocks only appear in the final assembled message.
             if (!this.taskToolCalls.has(taskId)) {
               this.taskToolCalls.set(taskId, []);
             }
@@ -160,6 +183,7 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
         if (msg.is_error || msg.isError) {
           task.status = 'error';
           task.error = resultText;
+          this.taskHasStreamedTokens.delete(taskId);
           task.callbackEmitted = true;
           callbacks.onError(new PluginError(resultText, PluginErrorCode.PROVIDER_ERROR, this.name), taskId);
         } else {
@@ -172,6 +196,7 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
             callbacks.onToolResult(toolName, 'Completed', taskId);
           }
           this.taskToolCalls.delete(taskId);
+          this.taskHasStreamedTokens.delete(taskId);
 
           task.callbackEmitted = true;
           callbacks.onDone(resultText, taskId);
@@ -183,5 +208,6 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
 
   protected override onTaskCleanup(taskId: string): void {
     this.taskToolCalls.delete(taskId);
+    this.taskHasStreamedTokens.delete(taskId);
   }
 }
