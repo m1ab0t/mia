@@ -6,7 +6,7 @@
  * Includes reranking for better search relevance.
  */
 
-import * as lancedb from '@lancedb/lancedb';
+import type * as lancedb from '@lancedb/lancedb';
 import { join } from 'path';
 import { mkdir } from 'fs/promises';
 import { getReranker } from './reranker';
@@ -14,6 +14,13 @@ import { localEmbed } from './embeddings';
 import { MIA_DIR } from '../constants/paths';
 import { logger } from '../utils/logger';
 const MEMORY_DB_PATH = join(MIA_DIR, 'memory.lance');
+
+/** Lazy-loaded LanceDB module — deferred until first memory access. */
+let _lancedb: typeof import('@lancedb/lancedb') | null = null;
+async function loadLanceDB(): Promise<typeof import('@lancedb/lancedb')> {
+  if (!_lancedb) _lancedb = await import('@lancedb/lancedb');
+  return _lancedb;
+}
 
 /** Rows fetched per page during migration and stats scans to bound peak RAM usage. */
 const SCAN_PAGE_SIZE = 1000;
@@ -171,7 +178,8 @@ export class MemoryStore {
   async connect(): Promise<void> {
     try {
       await mkdir(MIA_DIR, { recursive: true });
-      this.db = await lancedb.connect(MEMORY_DB_PATH);
+      const lance = await loadLanceDB();
+      this.db = await lance.connect(MEMORY_DB_PATH);
       logger.info({ path: MEMORY_DB_PATH }, 'Connected to LanceDB');
       await this.cleanupOrphanedStagingTables();
       await this.migrateSchemaIfNeeded();

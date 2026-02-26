@@ -7,8 +7,8 @@
  * Based on twinnydotdev/twinny's reranker.ts
  */
 
-import { Toxe } from 'toxe';
-import * as ort from 'onnxruntime-node';
+import type { Toxe } from 'toxe';
+import type * as ort from 'onnxruntime-node';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
@@ -26,6 +26,8 @@ export interface RankedResult {
 export class Reranker {
   private tokenizer: Toxe | null = null;
   private session: ort.InferenceSession | null = null;
+  /** Lazily loaded onnxruntime-node module — populated on first init(). */
+  private _ort: typeof import('onnxruntime-node') | null = null;
   private modelPath: string;
   private tokenizerPath: string;
   private initialized = false;
@@ -76,8 +78,15 @@ export class Reranker {
         return false;
       }
 
+      // Lazy-load heavy native modules only when reranking is first needed
+      const [ortMod, toxeMod] = await Promise.all([
+        import('onnxruntime-node'),
+        import('toxe'),
+      ]);
+      this._ort = ortMod;
+
       logger.debug({ modelPath: this.modelPath }, '[Reranker] Loading ONNX cross-encoder model');
-      await Promise.all([this.loadModel(), this.loadTokenizer()]);
+      await Promise.all([this.loadModel(), this.loadTokenizer(toxeMod.Toxe)]);
       this.initialized = true;
       logger.debug('[Reranker] Cross-encoder loaded successfully');
       return true;
@@ -175,14 +184,14 @@ export class Reranker {
 
   private getInputTensor(ids: number[], sampleCount: number): ort.Tensor {
     const inputIds = ids.map(BigInt);
-    return new ort.Tensor('int64', BigInt64Array.from(inputIds), [
+    return new this._ort!.Tensor('int64', BigInt64Array.from(inputIds), [
       sampleCount,
       inputIds.length / sampleCount,
     ]);
   }
 
   private getAttentionMaskTensor(inputLength: number, sampleCount: number): ort.Tensor {
-    return new ort.Tensor('int64', new BigInt64Array(inputLength).fill(1n), [
+    return new this._ort!.Tensor('int64', new BigInt64Array(inputLength).fill(1n), [
       sampleCount,
       inputLength / sampleCount,
     ]);
@@ -202,15 +211,15 @@ export class Reranker {
 
   private async loadModel(): Promise<void> {
     logger.debug({ modelPath: this.modelPath }, '[Reranker] Loading model file');
-    this.session = await ort.InferenceSession.create(this.modelPath, {
+    this.session = await this._ort!.InferenceSession.create(this.modelPath, {
       executionProviders: ['cpu'],
     });
     logger.debug('[Reranker] Model file loaded');
   }
 
-  private async loadTokenizer(): Promise<void> {
+  private async loadTokenizer(ToxeCtor: new (path: string) => Toxe): Promise<void> {
     logger.debug({ tokenizerPath: this.tokenizerPath }, '[Reranker] Loading tokenizer');
-    this.tokenizer = new Toxe(this.tokenizerPath);
+    this.tokenizer = new ToxeCtor(this.tokenizerPath);
     logger.debug('[Reranker] Tokenizer loaded');
   }
 }
