@@ -1,0 +1,1085 @@
+/**
+ * OpenCodePlugin — CodingPlugin implementation using the OpenCode SDK.
+ *
+ * OpenCode is a Go-based open-source terminal AI coding agent.
+ * https://github.com/sst/opencode
+ *
+ * Uses the @opencode-ai/sdk to communicate with an opencode server instance.
+ * The server is started lazily on first dispatch() and stopped on shutdown().
+ *
+ * SDK API (v1 nested style — { path, body, query } per @opencode-ai/sdk docs):
+ *
+ *   session.create({ body: { title? } })
+ *     → { data: Session }   (Session.id is the session ID)
+ *
+ *   session.prompt({ path: { id }, body: { parts, model?, system?, noReply? } })
+ *     → { data: { info: AssistantMessage, parts: Part[] } }
+ *
+ *   session.abort({ path: { id } })
+ *     → { data: boolean }
+ *
+ * The v1 client (returned by createOpencode()) uses nested { path, body } style.
+ * Path param is `id` (not `sessionID` — that's the v2 flat API).
+ *
+ * ## Dispatch phases
+ *
+ * `_dispatchConversationTask` is decomposed into five explicit phases:
+ *
+ *  1. Server guard    — lazy-start or connect to opencode; bail on failure
+ *  2. Concurrency     — reject early if at max concurrent tasks
+ *  3. Session         — look up or create an opencode session for this conversation
+ *  4. Task setup      — allocate taskId, register in `tasks`, arm abort + timeout
+ *  5. Prompt          — send to the SDK and process the response
+ *
+ * Phases 1 and 3 contain `await` calls that must remain directly inside
+ * `_dispatchConversationTask` (not in wrapper async methods) so that the
+ * microtask-tick count is predictable — notably, the abort-suppression test
+ * relies on `session.prompt()` being called within exactly 2 ticks.
+ *
+ * Phase 5 (`_executePrompt`) is fully extracted and further decomposed into:
+ *  - `_buildPromptBody`      — assemble the SDK request body
+ *  - `_buildModelConfig`     — parse a "provider/model" string into SDK shape
+ *  - `_processResponseParts` — iterate SDK parts and emit token/tool callbacks
+ *  - `_handleSdkError`       — SDK-level (HTTP/validation) error path
+ *  - `_handleAssistantError` — errors embedded in AssistantMessage.error
+ *  - `_handleCatchError`     — distinguish aborts from real errors in the catch block
+ */
+
+import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { getErrorMessage } from '../../utils/error-message';
+import type {
+  CodingPlugin,
+  CodingPluginCallbacks,
+  DispatchOptions,
+  PluginConfig,
+  PluginContext,
+  PluginDispatchResult,
+} from '../types';
+import { PluginError, PluginErrorCode } from '../types';
+import { buildSystemPrompt } from '../plugin-utils.js';
+// ── Server configuration constants ──────────────────────────────────────────
+const OPENCODE_DEFAULT_PORT = 4096;
+const OPENCODE_LOCALHOST = '127.0.0.1';
+const OPENCODE_RANDOM_PORT_MIN = 10000;
+const OPENCODE_RANDOM_PORT_RANGE = 50000;
+const OPENCODE_SERVER_TIMEOUT_MS = 15000;
+const DEFAULT_TASK_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Maximum time to wait for a health-check response from a pre-existing opencode
+ * server.  If the server is up but unresponsive (e.g. wrong service on the port),
+ * the fetch would otherwise hang indefinitely and block the entire dispatch path.
+ */
+const HEALTH_CHECK_TIMEOUT_MS = 3_000; // 3 seconds
+
+/**
+ * How often the plugin automatically prunes stale completed tasks from its
+ * internal task Map.  Without this, long-running daemon instances accumulate
+ * a task record for every prompt ever dispatched, leaking memory over time.
+ */
+const TASK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+// ── Minimal SDK type shapes (from @opencode-ai/sdk types.gen.d.ts) ──────────
+// We define only the shapes we actually use so we don't depend on import paths.
+
+interface SdkSession {
+  id: string;
+  title: string;
+}
+
+interface SdkToolStateCompleted {
+  status: 'completed';
+  input: Record<string, unknown>;
+  output: string;
+}
+
+interface SdkToolStateError {
+  status: 'error';
+  input: Record<string, unknown>;
+  error: string;
+}
+
+interface SdkToolStatePending {
+  status: 'pending';
+  input: Record<string, unknown>;
+}
+
+interface SdkToolStateRunning {
+  status: 'running';
+  input: Record<string, unknown>;
+}
+
+type SdkToolState =
+  | SdkToolStatePending
+  | SdkToolStateRunning
+  | SdkToolStateCompleted
+  | SdkToolStateError;
+
+interface SdkTextPart {
+  type: 'text';
+  text: string;
+}
+
+interface SdkToolPart {
+  type: 'tool';
+  tool: string;
+  callID: string;
+  sessionID: string;
+  state: SdkToolState;
+}
+
+// ── SSE event types (global.event stream) ────────────────────────────────────
+
+interface SdkEventPartUpdated {
+  type: 'message.part.updated';
+  properties: {
+    part: Partial<SdkToolPart> & { type: string };
+    delta?: string;
+  };
+}
+
+interface SdkEventSessionIdle {
+  type: 'session.idle';
+  properties: { sessionID: string };
+}
+
+interface SdkEventSessionError {
+  type: 'session.error';
+  properties: { sessionID?: string };
+}
+
+type SdkGlobalEventPayload =
+  | SdkEventPartUpdated
+  | SdkEventSessionIdle
+  | SdkEventSessionError
+  | { type: string };
+
+interface SdkGlobalEvent {
+  directory?: string;
+  payload?: SdkGlobalEventPayload;
+}
+
+interface SdkSseStreamResult {
+  stream: AsyncGenerator<SdkGlobalEvent, void, unknown>;
+}
+
+type GlobalEventFn = (options?: { signal?: AbortSignal }) => Promise<SdkSseStreamResult>;
+
+type SdkPart = SdkTextPart | SdkToolPart | { type: string };
+
+// ── Typed SDK call helpers (eliminates `as any` casts) ───────────────────────
+// Since the SDK is ESM-only and loaded lazily, we cast the methods at call
+// sites using `as unknown as XxxFn` rather than importing internal SDK types.
+
+interface SdkPromptBody {
+  parts: Array<{ type: 'text'; text: string }>;
+  model?: { providerID: string; modelID: string };
+  system?: string;
+  noReply?: boolean;
+}
+
+interface SdkPromptResponse {
+  data: { info: SdkAssistantMessage; parts: SdkPart[] } | null;
+  error?: unknown;
+}
+
+type PromptFn = (req: { path: { id: string }; body: SdkPromptBody }) => Promise<SdkPromptResponse>;
+type AbortFn  = (req: { path: { id: string } }) => Promise<{ data: boolean }>;
+
+/** Tracks which tool calls (call_<id>) and results (result_<id>) have been
+ *  emitted for a single dispatch.  Used to de-duplicate between the live SSE
+ *  stream and the fallback response-parts pass. */
+type EmittedCallIds = Set<string>;
+
+interface SdkAssistantMessage {
+  role: 'assistant';
+  error?: {
+    name: string;
+    data?: { message?: string };
+  };
+  cost: number;
+  tokens: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cache: { read: number; write: number };
+  };
+}
+
+/** Derived type for the opencode SDK client returned by createOpencodeClient(). */
+type OpencodeClient = ReturnType<typeof import('@opencode-ai/sdk').createOpencodeClient>;
+
+async function loadSDK() {
+  const sdk = await import('@opencode-ai/sdk');
+  return { createOpencode: sdk.createOpencode, createOpencodeClient: sdk.createOpencodeClient };
+}
+
+interface TaskInfo {
+  taskId: string;
+  status: 'running' | 'completed' | 'error' | 'killed';
+  startedAt: number;
+  completedAt?: number;
+  result?: string;
+  error?: string;
+  /** Normalised error code set at the earliest point the error is categorised. */
+  errorCode?: PluginErrorCode;
+  costUsd?: number;
+  durationMs?: number;
+  conversationId?: string;
+  /** The opencode session ID used for this task */
+  opencodeSessionId?: string;
+  /** Guard: true once onDone/onError callback has fired for this task */
+  callbackEmitted?: boolean;
+}
+
+export class OpenCodePlugin implements CodingPlugin {
+  readonly name = 'opencode';
+  readonly version = '2.0.0';
+
+  private config: PluginConfig | null = null;
+  private tasks = new Map<string, TaskInfo>();
+
+  // SDK client and server handle
+  private client: OpencodeClient | null = null;
+  private server: { url: string; close(): void } | null = null;
+  private serverPort = 0;
+
+  // Conversation → opencode session continuity
+  private conversationSessions = new Map<string, string>(); // conversationId → opencodeSessionId
+  private activeConversations = new Map<string, string>();  // conversationId → taskId
+  private conversationQueues = new Map<string, Array<{
+    prompt: string;
+    context: PluginContext;
+    options: DispatchOptions;
+    callbacks: CodingPluginCallbacks;
+    resolve: (result: PluginDispatchResult) => void;
+    reject: (error: Error) => void;
+  }>>();
+
+  // AbortControllers for in-flight HTTP requests
+  private taskAbortControllers = new Map<string, AbortController>();
+
+  // Server start guard
+  private _serverStarting: Promise<void> | null = null;
+
+  // Tracks tasks that were explicitly killed via abort() so catch blocks can
+  // distinguish intentional kills from real errors and suppress onError.
+  private _killedTaskIds = new Set<string>();
+
+  // Periodic task-pruning interval (started in initialize, cleared in shutdown).
+  private _cleanupInterval: ReturnType<typeof setInterval> | null = null;
+
+
+  // ── Lifecycle ─────────────────────────────────────────────────────
+
+  async initialize(config: PluginConfig): Promise<void> {
+    this.config = config;
+    // Server is started lazily on first dispatch to avoid spinning up
+    // an opencode process when this plugin isn't the active one.
+
+    // Periodically prune stale completed tasks so the task Map doesn't grow
+    // without bound in long-running daemon sessions.  .unref() ensures this
+    // interval does not prevent the Node process from exiting naturally.
+    const interval = setInterval(() => this.cleanup(), TASK_CLEANUP_INTERVAL_MS);
+    if (typeof interval === 'object' && 'unref' in interval) {
+      (interval as NodeJS.Timeout).unref();
+    }
+    this._cleanupInterval = interval;
+  }
+
+  /**
+   * Ensures the opencode server is running. Called lazily on first dispatch.
+   * Safe to call multiple times — subsequent calls await the same promise.
+   */
+  private async _ensureServer(): Promise<void> {
+    if (this.client) return;
+
+    if (!this._serverStarting) {
+      this._serverStarting = this._startServer();
+    }
+    await this._serverStarting;
+  }
+
+  private async _startServer(): Promise<void> {
+    const { createOpencode, createOpencodeClient } = await loadSDK();
+
+    // Build Basic Auth header if OPENCODE_SERVER_PASSWORD is set.
+    const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
+    const serverUsername = process.env.OPENCODE_SERVER_USERNAME ?? 'opencode';
+    const authHeaders: Record<string, string> = serverPassword
+      ? { Authorization: `Basic ${Buffer.from(`${serverUsername}:${serverPassword}`).toString('base64')}` }
+      : {};
+
+    // Try to connect to an already-running opencode server first (default port)
+    const existingPort = OPENCODE_DEFAULT_PORT;
+    const existingUrl = `http://${OPENCODE_LOCALHOST}:${existingPort}`;
+    try {
+      // Verify the server is reachable with a bounded health check.
+      // AbortSignal.timeout() prevents an unresponsive service on the port
+      // (e.g. a different process) from blocking the dispatch path indefinitely.
+      const res = await fetch(`${existingUrl}/global/health`, {
+        signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT_MS),
+        headers: authHeaders,
+      });
+      const health = (await res.json()) as { healthy?: boolean };
+      if (health?.healthy) {
+        const client = createOpencodeClient({ baseUrl: existingUrl, headers: authHeaders });
+        console.log(`[opencode] Connected to existing server at ${existingUrl}`);
+        this.client = client;
+        this.server = null; // We didn't start it, so nothing to close
+        this.serverPort = existingPort;
+        return;
+      }
+    } catch {
+      console.log(`[opencode] No existing server at ${existingUrl}, starting a new one...`);
+    }
+
+    // Fall back to starting a new server on a random port
+    this.serverPort = OPENCODE_RANDOM_PORT_MIN + Math.floor(Math.random() * OPENCODE_RANDOM_PORT_RANGE);
+
+    try {
+      const result = await createOpencode({
+        hostname: OPENCODE_LOCALHOST,
+        port: this.serverPort,
+        timeout: OPENCODE_SERVER_TIMEOUT_MS,
+        config: {
+          permission: {
+            edit: 'allow',
+            bash: 'allow',
+            webfetch: 'allow',
+            doom_loop: 'allow',
+            external_directory: 'allow',
+          },
+        },
+      });
+      // Wrap the client with auth headers if a password is configured.
+      this.client = Object.keys(authHeaders).length
+        ? createOpencodeClient({ baseUrl: result.server.url, headers: authHeaders })
+        : result.client;
+      this.server = result.server;
+    } catch (err) {
+      this.client = null;
+      this.server = null;
+      this._serverStarting = null; // Allow retry on next dispatch
+      throw new Error(`Failed to start opencode server: ${getErrorMessage(err)}`);
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    // Stop the periodic cleanup timer before aborting tasks.
+    if (this._cleanupInterval !== null) {
+      clearInterval(this._cleanupInterval);
+      this._cleanupInterval = null;
+    }
+
+    await this.abortAll();
+    this._killedTaskIds.clear();
+    if (this.server) {
+      try {
+        this.server.close();
+      } catch {
+        // already closed
+      }
+      this.server = null;
+      this.client = null;
+    }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    const check = new Promise<boolean>((resolve) => {
+      const child = execFile('opencode', ['--version'], { timeout: 5_000 }, (err) => {
+        resolve(!err);
+      });
+      child.stdout?.resume();
+      child.stderr?.resume();
+    });
+    const deadline = new Promise<boolean>((resolve) =>
+      setTimeout(() => resolve(false), 6_000)
+    );
+    return Promise.race([check, deadline]);
+  }
+
+  // ── Session management ─────────────────────────────────────────────
+
+  getSession(conversationId: string): string | undefined {
+    return this.conversationSessions.get(conversationId);
+  }
+
+  clearSession(conversationId: string): void {
+    this.conversationSessions.delete(conversationId);
+  }
+
+  clearAllSessions(): void {
+    this.conversationSessions.clear();
+  }
+
+  // ── Dispatch ───────────────────────────────────────────────────────
+
+  async dispatch(
+    prompt: string,
+    context: PluginContext,
+    options: DispatchOptions,
+    callbacks: CodingPluginCallbacks
+  ): Promise<PluginDispatchResult> {
+    const conversationId = options.conversationId;
+
+    // If there's already a running task for this conversation, queue this one
+    const activeTaskId = this.activeConversations.get(conversationId);
+    if (activeTaskId && this.tasks.get(activeTaskId)?.status === 'running') {
+      return new Promise<PluginDispatchResult>((resolve, reject) => {
+        if (!this.conversationQueues.has(conversationId)) {
+          this.conversationQueues.set(conversationId, []);
+        }
+        this.conversationQueues.get(conversationId)!.push({
+          prompt, context, options, callbacks, resolve, reject,
+        });
+      });
+    }
+
+    return this._dispatchConversationTask(prompt, context, options, callbacks);
+  }
+
+  /**
+   * Core dispatch implementation — called directly for new conversations and
+   * from the queue drain in `_onTaskFinished` for queued messages.
+   *
+   * Structured as five explicit phases.  Phases 1 and 3 contain `await` calls
+   * kept directly in this method body (not delegated to wrapper async methods)
+   * so the microtask-tick sequence matches what tests that inspect abort timing
+   * rely on: `session.prompt()` is reached within exactly 2 ticks when the
+   * client is already initialised and a session is being created.
+   */
+  private async _dispatchConversationTask(
+    prompt: string,
+    context: PluginContext,
+    options: DispatchOptions,
+    callbacks: CodingPluginCallbacks
+  ): Promise<PluginDispatchResult> {
+    const taskId = randomUUID();
+    const startedAt = Date.now();
+    const conversationId = options.conversationId;
+
+    // ── Phase 1: Server guard ─────────────────────────────────────────────────
+    // await is kept here (not in a wrapper async method) to preserve tick count.
+    try {
+      await this._ensureServer();
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      const pluginErr = new PluginError(msg, PluginErrorCode.SPAWN_FAILURE, this.name, err);
+      callbacks.onError(pluginErr, taskId);
+      return { taskId, success: false, output: msg, durationMs: 0 };
+    }
+    if (!this.client) {
+      const pluginErr = new PluginError('OpenCode server is not running.', PluginErrorCode.SPAWN_FAILURE, this.name);
+      callbacks.onError(pluginErr, taskId);
+      return { taskId, success: false, output: pluginErr.message, durationMs: 0 };
+    }
+
+    // ── Phase 2: Concurrency guard ────────────────────────────────────────────
+    const limitErr = this._checkConcurrencyLimit(taskId, startedAt, callbacks);
+    if (limitErr) return limitErr;
+
+    // ── Phase 3: Session resolution ───────────────────────────────────────────
+    // await is kept here (not in a wrapper async method) to preserve tick count.
+    let sessionId = this.conversationSessions.get(conversationId);
+    if (!sessionId) {
+      try {
+        console.log(`[opencode] Creating session for conversation=${conversationId.substring(0, 8)}`);
+        const sessionResult = await this.client.session.create({
+          body: { title: `mia-${conversationId.substring(0, 8)}` },
+        });
+        const session = sessionResult.data as SdkSession | null;
+        if (!session?.id) {
+          throw new Error(
+            `Session creation returned no ID. Full response: ${JSON.stringify(sessionResult)?.substring(0, 300)}`
+          );
+        }
+        sessionId = session.id;
+        this.conversationSessions.set(conversationId, sessionId);
+        console.log(`[opencode] Session created: ${sessionId}`);
+      } catch (err) {
+        const msg = `Failed to create opencode session: ${getErrorMessage(err)}`;
+        callbacks.onError(new PluginError(msg, PluginErrorCode.SESSION_ERROR, this.name, err), taskId);
+        return { taskId, success: false, output: msg, durationMs: Date.now() - startedAt };
+      }
+    }
+
+    // ── Phase 4: Task registration and timeout setup ──────────────────────────
+    const { timer, abortController } = this._setupTaskAndTimeout(
+      taskId, startedAt, conversationId, sessionId, options
+    );
+
+    // ── Phase 5: Prompt execution ─────────────────────────────────────────────
+    return this._executePrompt(
+      prompt, context, options, sessionId, taskId, startedAt, timer, abortController, callbacks
+    );
+  }
+
+  // ── Dispatch phase helpers ─────────────────────────────────────────
+
+  /**
+   * Phase 2 — Concurrency guard.
+   *
+   * Returns a pre-built error result if the running task count is at the
+   * configured ceiling, otherwise returns `null` to allow dispatch to proceed.
+   */
+  private _checkConcurrencyLimit(
+    taskId: string,
+    startedAt: number,
+    callbacks: CodingPluginCallbacks
+  ): PluginDispatchResult | null {
+    const maxConcurrency = this.config?.maxConcurrency ?? 3;
+    const runningCount = Array.from(this.tasks.values()).filter(t => t.status === 'running').length;
+    if (runningCount < maxConcurrency) return null;
+
+    const errorMsg = `Concurrency limit reached (${maxConcurrency})`;
+    callbacks.onError(new PluginError(errorMsg, PluginErrorCode.CONCURRENCY_LIMIT, this.name), taskId);
+    return { taskId, success: false, output: errorMsg, durationMs: Date.now() - startedAt };
+  }
+
+  /**
+   * Phase 4 — Task registration and timeout setup.
+   *
+   * Inserts the task into `tasks` as 'running', marks the conversation as
+   * active, creates an AbortController for the in-flight HTTP request, and
+   * arms the dispatch timeout.  Returns both the timer handle and controller
+   * so Phase 5 can cancel them when the request settles.
+   */
+  private _setupTaskAndTimeout(
+    taskId: string,
+    startedAt: number,
+    conversationId: string,
+    sessionId: string,
+    options: DispatchOptions
+  ): { timer: ReturnType<typeof setTimeout>; abortController: AbortController } {
+    const taskInfo: TaskInfo = {
+      taskId,
+      status: 'running',
+      startedAt,
+      conversationId,
+      opencodeSessionId: sessionId,
+    };
+    this.tasks.set(taskId, taskInfo);
+    this.activeConversations.set(conversationId, taskId);
+
+    const abortController = new AbortController();
+    this.taskAbortControllers.set(taskId, abortController);
+
+    const timeoutMs = options.timeoutMs || this.config?.timeoutMs || DEFAULT_TASK_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      abortController.abort();
+      const task = this.tasks.get(taskId);
+      if (task && task.status === 'running') {
+        task.status = 'error';
+        task.completedAt = Date.now();
+        task.durationMs = task.completedAt - task.startedAt;
+        task.error = `Timeout after ${Math.round(timeoutMs / 60000)}min`;
+        task.errorCode = PluginErrorCode.TIMEOUT;
+      }
+    }, timeoutMs);
+
+    return { timer, abortController };
+  }
+
+  // ── Phase 5: Prompt execution and response processing ─────────────
+
+  /**
+   * Phase 5 — Prompt execution.
+   *
+   * Sends the prompt to the opencode SDK, then routes the response through
+   * focused helper methods: SDK-level errors, AssistantMessage errors, the
+   * happy-path parts iterator, and the catch-block error handler.
+   */
+  private async _executePrompt(
+    prompt: string,
+    context: PluginContext,
+    options: DispatchOptions,
+    sessionId: string,
+    taskId: string,
+    startedAt: number,
+    timer: ReturnType<typeof setTimeout>,
+    abortController: AbortController,
+    callbacks: CodingPluginCallbacks
+  ): Promise<PluginDispatchResult> {
+    try {
+      const body = this._buildPromptBody(prompt, context, options);
+
+      // Shared set to de-duplicate tool calls between the live SSE stream and
+      // the fallback pass over response parts after the blocking call returns.
+      const emittedCallIds: EmittedCallIds = new Set();
+
+      // Subscribe to the SSE event stream for real-time tool call updates.
+      // This runs concurrently with the blocking session.prompt HTTP call so
+      // tool cards appear on mobile while the agent is still working.
+      const sseAbort = new AbortController();
+      // Forward the task-level abort so SSE is also torn down on task kill.
+      abortController.signal.addEventListener('abort', () => sseAbort.abort(), { once: true });
+
+      // Fire-and-forget — errors are handled inside _subscribeToToolEvents.
+      void this._subscribeToToolEvents(sessionId, taskId, callbacks, emittedCallIds, sseAbort.signal);
+
+      const response = await (this.client!.session.prompt as unknown as PromptFn)({
+        path: { id: sessionId },
+        body,
+      });
+
+      // session.prompt has returned — stop the SSE subscription.
+      sseAbort.abort();
+
+      clearTimeout(timer);
+      this.taskAbortControllers.delete(taskId);
+
+      // SDK-level error (HTTP errors, validation failures from the server)
+      if (response?.error) {
+        return this._handleSdkError(response.error, taskId, callbacks);
+      }
+
+      const task = this.tasks.get(taskId);
+
+      // Task was aborted or timed out while the request was in-flight
+      if (!task || task.status !== 'running') {
+        this._onTaskFinished(taskId);
+        return {
+          taskId,
+          success: false,
+          output: task?.error || 'Task was aborted',
+          durationMs: task?.durationMs || Date.now() - startedAt,
+        };
+      }
+
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - task.startedAt;
+
+      const responseData = response?.data;
+
+      // Error embedded in the AssistantMessage (e.g. provider auth failure)
+      if (responseData?.info?.error) {
+        return this._handleAssistantError(responseData.info.error, task, taskId, callbacks);
+      }
+
+      // Happy path: emit callbacks for all parts, then complete the task.
+      // emittedCallIds prevents re-emitting tool calls already sent via SSE.
+      const content = this._processResponseParts(responseData?.parts ?? [], taskId, callbacks, emittedCallIds);
+
+      if (responseData?.info?.cost) {
+        task.costUsd = responseData.info.cost;
+      }
+
+      task.status = 'completed';
+      task.result = content;
+      task.callbackEmitted = true;
+      callbacks.onDone(content, taskId);
+
+      this._onTaskFinished(taskId);
+
+      return {
+        taskId,
+        success: true,
+        output: content,
+        durationMs: task.durationMs,
+        metadata: {
+          costUsd: task.costUsd,
+          tokens: responseData?.info?.tokens,
+          opencodeSessionId: sessionId,
+        },
+      };
+    } catch (err) {
+      clearTimeout(timer);
+      this.taskAbortControllers.delete(taskId);
+      return this._handleCatchError(err, taskId, startedAt, callbacks);
+    }
+  }
+
+  // ── Response helpers ────────────────────────────────────────────────
+
+  /**
+   * Builds the SDK request body from the prompt, context, and dispatch options.
+   *
+   * Parses the optional model string ("provider/model") into the SDK's
+   * `{ providerID, modelID }` shape and attaches the assembled system prompt.
+   */
+  private _buildPromptBody(
+    prompt: string,
+    context: PluginContext,
+    options: DispatchOptions
+  ): SdkPromptBody {
+    const model = options.model || this.config?.model;
+    const modelConfig = this._buildModelConfig(model);
+    const systemPrompt = buildSystemPrompt(this.config?.systemPrompt, context, options);
+
+    return {
+      parts: [{ type: 'text', text: prompt }],
+      ...(modelConfig && { model: modelConfig }),
+      ...(systemPrompt && { system: systemPrompt }),
+    };
+  }
+
+  /**
+   * Parses a model string into the SDK's `{ providerID, modelID }` shape.
+   *
+   * Accepts either "provider/model" (e.g. "anthropic/claude-sonnet-4-6") or a
+   * bare model name (defaulting the provider to "anthropic").
+   * Returns `undefined` when no model is configured.
+   */
+  private _buildModelConfig(
+    model: string | undefined
+  ): { providerID: string; modelID: string } | undefined {
+    if (!model) return undefined;
+
+    const slashIdx = model.indexOf('/');
+    if (slashIdx > 0) {
+      return {
+        providerID: model.substring(0, slashIdx),
+        modelID: model.substring(slashIdx + 1),
+      };
+    }
+
+    return { providerID: 'anthropic', modelID: model };
+  }
+
+  /**
+   * Subscribes to the opencode SSE event stream and emits `onToolCall` /
+   * `onToolResult` callbacks in real-time as tool executions progress.
+   *
+   * Runs concurrently with the blocking `session.prompt` HTTP call so that
+   * tool cards appear on the mobile chat UI while the agent is still working,
+   * matching the behaviour of the Claude and Codex plugins.
+   *
+   * `emittedCallIds` is a shared set (keyed by `call_<callID>` / `result_<callID>`)
+   * used to de-duplicate against the fallback response-parts pass that follows.
+   *
+   * The loop exits when:
+   *   - the `signal` is aborted (called after `session.prompt` returns), OR
+   *   - a `session.idle` / `session.error` event for this session arrives.
+   */
+  private async _subscribeToToolEvents(
+    sessionId: string,
+    taskId: string,
+    callbacks: CodingPluginCallbacks,
+    emittedCallIds: EmittedCallIds,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      const sseResult = await (this.client!.global.event as unknown as GlobalEventFn)({ signal });
+
+      for await (const evt of sseResult.stream) {
+        if (signal.aborted) break;
+
+        const payload = evt?.payload;
+        if (!payload) continue;
+
+        // Session finished — stop listening
+        if (
+          (payload.type === 'session.idle' || payload.type === 'session.error') &&
+          (payload as SdkEventSessionIdle | SdkEventSessionError).properties?.sessionID === sessionId
+        ) {
+          break;
+        }
+
+        if (payload.type !== 'message.part.updated') continue;
+
+        const part = (payload as SdkEventPartUpdated).properties?.part;
+        if (!part || part.type !== 'tool') continue;
+        // Filter to events belonging to the current opencode session
+        if (part.sessionID && part.sessionID !== sessionId) continue;
+
+        const toolName = part.tool || 'unknown';
+        const state   = part.state;
+        if (!state) continue;
+
+        const callId = part.callID || toolName;
+
+        // Emit onToolCall once (on 'running' or 'completed'/'error' if 'running' was missed)
+        const callKey   = `call_${callId}`;
+        const resultKey = `result_${callId}`;
+
+        if (state.status === 'running' && !emittedCallIds.has(callKey)) {
+          emittedCallIds.add(callKey);
+          callbacks.onToolCall(toolName, state.input ?? {}, taskId);
+        } else if (state.status === 'completed' && !emittedCallIds.has(resultKey)) {
+          if (!emittedCallIds.has(callKey)) {
+            emittedCallIds.add(callKey);
+            callbacks.onToolCall(toolName, state.input ?? {}, taskId);
+          }
+          emittedCallIds.add(resultKey);
+          callbacks.onToolResult(toolName, (state as SdkToolStateCompleted).output, taskId);
+        } else if (state.status === 'error' && !emittedCallIds.has(resultKey)) {
+          if (!emittedCallIds.has(callKey)) {
+            emittedCallIds.add(callKey);
+            callbacks.onToolCall(toolName, state.input ?? {}, taskId);
+          }
+          emittedCallIds.add(resultKey);
+          callbacks.onToolResult(
+            toolName,
+            `Error: ${(state as SdkToolStateError).error || 'unknown'}`,
+            taskId,
+          );
+        }
+      }
+    } catch {
+      // SSE subscription failed or was aborted — tool calls that were missed
+      // here will be picked up from the response parts in _processResponseParts.
+    }
+  }
+
+  /**
+   * Iterates the SDK response parts and fires the appropriate callbacks.
+   *
+   * - `TextPart`  → `onToken`
+   * - `ToolPart`  → `onToolCall` / `onToolResult` (only if not already emitted
+   *                 via the SSE stream — de-duplicated through `emittedCallIds`)
+   * - Other types (step-start, reasoning, snapshot, …) are silently skipped.
+   *
+   * Returns the concatenated text output for inclusion in the dispatch result.
+   */
+  private _processResponseParts(
+    parts: SdkPart[],
+    taskId: string,
+    callbacks: CodingPluginCallbacks,
+    emittedCallIds?: EmittedCallIds,
+  ): string {
+    const textParts: string[] = [];
+
+    for (const part of parts) {
+      if (part.type === 'text') {
+        const textPart = part as SdkTextPart;
+        if (textPart.text) {
+          textParts.push(textPart.text);
+          callbacks.onToken(textPart.text, taskId);
+        }
+      } else if (part.type === 'tool') {
+        const toolPart = part as SdkToolPart;
+        const toolName = toolPart.tool || 'unknown';
+        const state    = toolPart.state;
+        if (state) {
+          const callId    = toolPart.callID || toolName;
+          const callKey   = `call_${callId}`;
+          const resultKey = `result_${callId}`;
+
+          if (!emittedCallIds?.has(callKey)) {
+            callbacks.onToolCall(toolName, state.input ?? {}, taskId);
+          }
+
+          if (state.status === 'completed' && !emittedCallIds?.has(resultKey)) {
+            callbacks.onToolResult(toolName, (state as SdkToolStateCompleted).output, taskId);
+          } else if (state.status === 'error' && !emittedCallIds?.has(resultKey)) {
+            callbacks.onToolResult(
+              toolName,
+              `Error: ${(state as SdkToolStateError).error || 'unknown'}`,
+              taskId,
+            );
+          }
+        }
+      }
+      // Other part types (reasoning, step-start, step-finish, snapshot, patch, agent, etc.)
+      // are informational and don't need callback emission.
+    }
+
+    return textParts.join('\n');
+  }
+
+  /**
+   * Handles an SDK-level error returned in `response.error`.
+   *
+   * These are HTTP-level or validation failures the opencode server reports
+   * before producing a complete AssistantMessage.  The task is marked errored,
+   * `onError` is fired, and `_onTaskFinished` drains the conversation queue.
+   */
+  private _handleSdkError(
+    error: unknown,
+    taskId: string,
+    callbacks: CodingPluginCallbacks
+  ): PluginDispatchResult {
+    const task = this.tasks.get(taskId);
+    const errDetail = JSON.stringify(error)?.substring(0, 300) ?? 'unknown SDK error';
+
+    if (task) {
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - task.startedAt;
+      task.status = 'error';
+      task.error = errDetail;
+      task.callbackEmitted = true;
+      callbacks.onError(new PluginError(`OpenCode SDK error: ${errDetail}`, PluginErrorCode.PROVIDER_ERROR, this.name, error), taskId);
+    }
+
+    this._onTaskFinished(taskId);
+
+    return {
+      taskId,
+      success: false,
+      output: `OpenCode SDK error: ${errDetail}`,
+      durationMs: task?.durationMs ?? 0,
+    };
+  }
+
+  /**
+   * Handles an error embedded in `AssistantMessage.error`.
+   *
+   * These are provider-level failures (e.g. auth error, rate limit) that
+   * opencode surfaces inside the completed assistant response object rather
+   * than as an HTTP error.
+   */
+  private _handleAssistantError(
+    errObj: NonNullable<SdkAssistantMessage['error']>,
+    task: TaskInfo,
+    taskId: string,
+    callbacks: CodingPluginCallbacks
+  ): PluginDispatchResult {
+    const errorMsg = errObj.data?.message ?? errObj.name;
+
+    task.status = 'error';
+    task.error = errorMsg;
+    task.errorCode = PluginErrorCode.PROVIDER_ERROR;
+    task.callbackEmitted = true;
+    callbacks.onError(new PluginError(errorMsg, PluginErrorCode.PROVIDER_ERROR, this.name, errObj), taskId);
+
+    this._onTaskFinished(taskId);
+
+    return {
+      taskId,
+      success: false,
+      output: errorMsg,
+      durationMs: task.durationMs ?? 0,
+    };
+  }
+
+  /**
+   * Handles the catch block inside `_executePrompt`.
+   *
+   * Distinguishes between three outcomes so each gets the right treatment:
+   *  - **Intentional abort** (`_killedTaskIds` contains taskId): suppresses `onError`
+   *    since the caller already knows the task was cancelled.
+   *  - **Timeout** (task status is already 'error'): uses the recorded message.
+   *  - **Real error**: records the error text and fires `onError`.
+   */
+  private _handleCatchError(
+    err: unknown,
+    taskId: string,
+    startedAt: number,
+    callbacks: CodingPluginCallbacks
+  ): PluginDispatchResult {
+    // _killedTaskIds.delete() returns true and removes the entry atomically.
+    const wasKilled = this._killedTaskIds.delete(taskId);
+
+    const task = this.tasks.get(taskId);
+    if (task && task.status === 'running') {
+      task.status = wasKilled ? 'killed' : 'error';
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - task.startedAt;
+      if (!wasKilled) task.error = getErrorMessage(err);
+    }
+
+    // Suppress onError for intentional aborts — callers that call abort() do
+    // not expect an error callback; they already know the task is going away.
+    // For timeouts, task.error holds the human-readable timeout message set
+    // by the timer callback.
+    if (!task?.callbackEmitted && !wasKilled) {
+      if (task) task.callbackEmitted = true;
+      const errorMsg = task?.error ?? getErrorMessage(err);
+      const code = task?.errorCode ?? PluginErrorCode.UNKNOWN;
+      callbacks.onError(new PluginError(errorMsg, code, this.name, wasKilled ? undefined : err), taskId);
+    }
+
+    this._onTaskFinished(taskId);
+
+    return {
+      taskId,
+      success: false,
+      output: task?.error ?? getErrorMessage(err),
+      durationMs: task?.durationMs ?? Date.now() - startedAt,
+    };
+  }
+
+  // ── Post-dispatch bookkeeping ─────────────────────────────────────
+
+  private _onTaskFinished(taskId: string): void {
+    const task = this.tasks.get(taskId);
+    if (!task?.conversationId) return;
+
+    const conversationId = task.conversationId;
+
+    // Clear the active slot for this conversation
+    if (this.activeConversations.get(conversationId) === taskId) {
+      this.activeConversations.delete(conversationId);
+    }
+
+    // Dequeue the next waiting task for this conversation
+    const queue = this.conversationQueues.get(conversationId);
+    if (queue && queue.length > 0) {
+      const next = queue.shift()!;
+      if (queue.length === 0) this.conversationQueues.delete(conversationId);
+
+      this._dispatchConversationTask(next.prompt, next.context, next.options, next.callbacks)
+        .then(result => next.resolve(result))
+        .catch(err => next.reject(err as Error));
+    }
+  }
+
+  // ── Abort ───────────────────────────────────────────────────────────
+
+  async abort(taskId: string): Promise<void> {
+    // Mark this as an intentional kill so the catch block in
+    // _executePrompt suppresses the onError callback.
+    this._killedTaskIds.add(taskId);
+
+    // Abort the in-flight HTTP request
+    const controller = this.taskAbortControllers.get(taskId);
+    if (controller) {
+      controller.abort();
+      this.taskAbortControllers.delete(taskId);
+    }
+
+    // Also tell the opencode server to abort the session.
+    // SDK v1: session.abort({ path: { id } })
+    const task = this.tasks.get(taskId);
+    if (task?.opencodeSessionId && this.client) {
+      try {
+        await (this.client.session.abort as unknown as AbortFn)({
+          path: { id: task.opencodeSessionId },
+        });
+      } catch {
+        // Best effort — server-side abort failure doesn't affect task cleanup
+      }
+    }
+
+    if (task && task.status === 'running') {
+      task.status = 'killed';
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - task.startedAt;
+    }
+    // _killedTaskIds is cleaned up by the catch block in _executePrompt
+    // when the in-flight request rejects, or by cleanup()/shutdown() otherwise.
+  }
+
+  async abortAll(): Promise<void> {
+    const runningTaskIds = Array.from(this.tasks.entries())
+      .filter(([, t]) => t.status === 'running')
+      .map(([id]) => id);
+
+    await Promise.allSettled(runningTaskIds.map(id => this.abort(id)));
+  }
+
+  // ── Info / cleanup ─────────────────────────────────────────────────
+
+  getRunningTaskCount(): number {
+    return Array.from(this.tasks.values()).filter(t => t.status === 'running').length;
+  }
+
+  cleanup(maxAgeMs: number = 60 * 60 * 1000): number {
+    const now = Date.now();
+    let pruned = 0;
+    for (const [taskId, task] of this.tasks) {
+      if (
+        task.status !== 'running' &&
+        task.completedAt &&
+        now - task.completedAt > maxAgeMs
+      ) {
+        this.tasks.delete(taskId);
+        this._killedTaskIds.delete(taskId); // Clean up any stale kill marker
+        pruned++;
+      }
+    }
+    return pruned;
+  }
+}

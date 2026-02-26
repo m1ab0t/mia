@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "offset": 0,
+  "schema": [
+    {
+      "name": "conversations",
+      "namespace": "mia",
+      "id": 0,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [],
+      "schema": "@mia/conversation",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "messages",
+      "namespace": "mia",
+      "id": 1,
+      "type": 1,
+      "version": 1,
+      "versionField": null,
+      "indexes": [
+        "@mia/messages-by-conversation"
+      ],
+      "schema": "@mia/message",
+      "derived": false,
+      "key": [
+        "id"
+      ],
+      "trigger": null
+    },
+    {
+      "name": "messages-by-conversation",
+      "namespace": "mia",
+      "id": 2,
+      "type": 2,
+      "version": 1,
+      "collection": "@mia/messages",
+      "unique": false,
+      "deprecated": false,
+      "key": {
+        "type": {
+          "fields": [
+            {
+              "name": "conversationId",
+              "type": "string"
+            },
+            {
+              "name": "timestamp",
+              "type": "uint"
+            }
+          ]
+        },
+        "map": "mapMessageToConversation"
+      }
+    }
+  ]
+}

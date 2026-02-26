@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "schema": [
+    {
+      "name": "conversation",
+      "namespace": "mia",
+      "compact": true,
+      "flagsPosition": -1,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "title",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "createdAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "updatedAt",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "name": "message",
+      "namespace": "mia",
+      "compact": true,
+      "flagsPosition": 5,
+      "fields": [
+        {
+          "name": "id",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "conversationId",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "type",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "content",
+          "required": true,
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "timestamp",
+          "required": true,
+          "type": "uint",
+          "version": 1
+        },
+        {
+          "name": "toolName",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "toolInput",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "toolResult",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "toolStatus",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "routeInfo",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "toolExecutions",
+          "type": "string",
+          "version": 1
+        },
+        {
+          "name": "metadata",
+          "type": "string",
+          "version": 1
+        }
+      ]
+    }
+  ]
+}
