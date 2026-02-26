@@ -143,7 +143,7 @@ Run `mia help` or `mia <command> --help` for full flag reference.
 
 ### Mobile App
 
-A React Native mobile client is available as a separate project (`mia-expo`). It connects to the daemon over Hyperswarm P2P — conversations continue seamlessly across devices.
+A React Native mobile client is available as a separate project. It connects to the daemon over Hyperswarm P2P — conversations continue seamlessly across devices.
 
 **Features:**
 - Real-time sync with the CLI daemon (no server required)
