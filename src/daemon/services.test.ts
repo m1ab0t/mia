@@ -146,7 +146,6 @@ function makeHandlers() {
     })),
     log: vi.fn() as Mock,
     onRestart: vi.fn(),
-    onAbortAll: vi.fn(async () => {}),
     getTaskStatus: vi.fn(() => ({ running: false, count: 0 })),
   };
 }
@@ -604,23 +603,6 @@ describe("handleAgentMessage — 'user_message'", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("handleAgentMessage — 'control_new_conversation'", () => {
-  it('calls onAbortAll to kill running plugins', async () => {
-    const child = makeFakeChild();
-    vi.mocked(spawn).mockReturnValue(child as never);
-    const h = makeHandlers();
-    const p = spawnP2PSubAgent(
-      h.routeMessageFn, h.queue, h.onPluginSwitch, h.getPluginsInfo, h.log,
-      undefined, h.onAbortAll, h.getTaskStatus,
-    );
-    pushMessage(child, { type: 'ready', key: 'k' });
-    await p;
-
-    pushMessage(child, { type: 'control_new_conversation' });
-    await new Promise(r => setImmediate(r));
-
-    expect(h.onAbortAll).toHaveBeenCalledOnce();
-  });
-
   it('sets currentConversationId to null', async () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as never);
@@ -673,23 +655,6 @@ describe("handleAgentMessage — 'control_load_conversation'", () => {
     await new Promise(r => setImmediate(r));
 
     expect(vi.mocked(setCurrentConversationId)).toHaveBeenCalledWith('loaded-99');
-  });
-
-  it('calls onAbortAll to kill running plugins', async () => {
-    const child = makeFakeChild();
-    vi.mocked(spawn).mockReturnValue(child as never);
-    const h = makeHandlers();
-    const p = spawnP2PSubAgent(
-      h.routeMessageFn, h.queue, h.onPluginSwitch, h.getPluginsInfo, h.log,
-      undefined, h.onAbortAll, h.getTaskStatus,
-    );
-    pushMessage(child, { type: 'ready', key: 'k' });
-    await p;
-
-    pushMessage(child, { type: 'control_load_conversation', conversationId: 'loaded-99' });
-    await new Promise(r => setImmediate(r));
-
-    expect(h.onAbortAll).toHaveBeenCalledOnce();
   });
 
   it('includes conversationId in the log message', async () => {

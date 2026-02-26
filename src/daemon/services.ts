@@ -63,7 +63,6 @@ export async function spawnP2PSubAgent(
   getPluginsInfo: () => Promise<{ plugins: PluginInfo[]; activePlugin: string }>,
   log: (level: LogLevel, msg: string) => void,
   onRestart?: () => void,
-  onAbortAll?: () => Promise<void>,
   getTaskStatus?: () => { running: boolean; count: number },
 ): Promise<P2PSubAgentResult> {
   return new Promise((resolve) => {
@@ -124,7 +123,6 @@ export async function spawnP2PSubAgent(
             getPluginsInfo,
             log,
             onRestart: onRestart || (() => {}),
-            onAbortAll: onAbortAll || (() => Promise.resolve()),
             getTaskStatus: getTaskStatus || (() => ({ running: false, count: 0 })),
             onPeerConnected: () => peerConnectedCallback?.(),
             resolveReady: (result) => {
@@ -168,7 +166,6 @@ interface HandlerCtx {
   getPluginsInfo: () => Promise<{ plugins: PluginInfo[]; activePlugin: string }>;
   log: (level: LogLevel, msg: string) => void;
   onRestart: () => void;
-  onAbortAll: () => Promise<void>;
   getTaskStatus: () => { running: boolean; count: number };
   onPeerConnected: () => void;
   resolveReady: (result: Omit<P2PSubAgentResult, 'onPeerConnected'>) => void;
@@ -280,14 +277,12 @@ function handleAgentMessage(msg: AgentToDaemon, ctx: HandlerCtx): void {
 
     case 'control_new_conversation':
       setCurrentConversationId(null);
-      log('info', 'New conversation — aborting running plugins');
-      ctx.onAbortAll().catch((err) => log('warn', `Abort failed: ${getErrorMessage(err)}`));
+      log('info', 'New conversation');
       break;
 
     case 'control_load_conversation':
       setCurrentConversationId(msg.conversationId);
-      log('info', `Loading conversation ${msg.conversationId} — aborting running plugins`);
-      ctx.onAbortAll().catch((err) => log('warn', `Abort failed: ${getErrorMessage(err)}`));
+      log('info', `Loading conversation ${msg.conversationId}`);
       break;
 
     case 'control_plugin_switch': {
