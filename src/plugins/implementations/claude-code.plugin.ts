@@ -167,6 +167,21 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
         break;
       }
 
+      case 'stream_event': {
+        // Real-time streaming events from the Anthropic API.
+        // These arrive as `stream_event` wrappers around the raw SSE event objects.
+        // content_block_delta / text_delta carries each incremental text chunk.
+        const event = (msg.event as Record<string, unknown>) ?? {};
+        if (event.type === 'content_block_delta') {
+          const delta = (event.delta as Record<string, unknown>) ?? {};
+          if (delta.type === 'text_delta' && typeof delta.text === 'string' && delta.text) {
+            this.taskHasStreamedTokens.add(taskId);
+            callbacks.onToken(delta.text, taskId);
+          }
+        }
+        break;
+      }
+
       case 'result': {
         const task = this.tasks.get(taskId);
         if (!task || task.callbackEmitted) break;
