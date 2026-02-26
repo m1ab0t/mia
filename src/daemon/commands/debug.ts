@@ -37,6 +37,12 @@ import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/
 import { dispatchToPlugin } from './dispatch.js';
 import { readStdinContent } from './parse-utils.js';
 
+import {
+  MAX_SNIPPET_CHARS,
+  MAX_TOTAL_SNIPPET_CHARS,
+  MAX_ERROR_CHARS,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 /** Lines of code context to include around each referenced line. */
@@ -44,17 +50,8 @@ const CONTEXT_LINES_SHALLOW = 10;
 const CONTEXT_LINES_NORMAL = 20;
 const CONTEXT_LINES_DEEP = 40;
 
-/** Max chars read from a single file snippet. */
-const MAX_SNIPPET_CHARS = 3_000;
-
-/** Max total chars of code snippets in the prompt. */
-const MAX_TOTAL_SNIPPET_CHARS = 10_000;
-
 /** Max number of stack frame references to follow. */
 const MAX_REFS = 6;
-
-/** Max chars of the raw error text forwarded to the plugin. */
-const MAX_ERROR_CHARS = 4_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

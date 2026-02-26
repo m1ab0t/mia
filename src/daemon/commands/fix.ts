@@ -22,9 +22,8 @@ import { spawnSync } from 'child_process';
 import { x, bold, dim, red, green, cyan, gray, DASH } from '../../utils/ansi.js';
 import { logger } from '../../utils/logger.js';
 import { loadActivePlugin } from './plugin-loader.js';
+import { MAX_OUTPUT_CHARS_FIX as MAX_OUTPUT_CHARS } from './config-constants.js';
 
-// Truncate command output before sending to the agent to avoid token explosion.
-const MAX_OUTPUT_CHARS = 8_000;
 const DEFAULT_MAX_RETRIES = 5;
 // Per-run shell timeout (ms). Most test/lint/build commands finish in well under this.
 const COMMAND_TIMEOUT_MS = 120_000;

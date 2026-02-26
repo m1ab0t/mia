@@ -31,11 +31,9 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
 import { dispatchToPlugin } from './dispatch.js';
+import { MAX_PROMPT_CHARS_STANDUP as MAX_PROMPT_CHARS } from './config-constants.js';
 
 const TRACES_DIR = join(homedir(), '.mia', 'traces');
-
-/** Maximum diff / context chars forwarded to the plugin. */
-const MAX_PROMPT_CHARS = 12_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

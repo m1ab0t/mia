@@ -35,6 +35,7 @@ import { join, relative, extname } from 'path';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
 import { dispatchToPlugin } from './dispatch.js';
 import { extractSection } from './parse-utils.js';
+import { MAX_SOURCE_CHARS_STANDARD as MAX_CONTEXT_CHARS } from './config-constants.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -56,9 +57,6 @@ const SKIP_EXTENSIONS = new Set([
 
 /** Max file size to read (2 MB — avoids reading minified bundles). */
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-
-/** Max characters of diff/context to send to the plugin. */
-const MAX_CONTEXT_CHARS = 14_000;
 
 /** Default TODO types to search for. */
 const DEFAULT_TYPES: TodoType[] = ['TODO', 'FIXME', 'HACK', 'XXX', 'BUG'];

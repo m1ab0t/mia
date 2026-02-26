@@ -34,22 +34,17 @@ import { dispatchToPlugin } from './dispatch.js';
 import { extractSection } from './parse-utils.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
 
+import {
+  MAX_FILE_CHARS_EXPLAIN as MAX_FILE_CHARS,
+  MAX_DIR_CHARS,
+  MAX_RELATED_CHARS,
+  MAX_RELATED_TOTAL,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Max chars read from a single source file. */
-const MAX_FILE_CHARS = 12_000;
-
-/** Max chars read across all files when explaining a directory. */
-const MAX_DIR_CHARS = 18_000;
-
-/** Max chars read from a single related file (importer/test). */
-const MAX_RELATED_CHARS = 2_000;
 
 /** Max number of related files included in the prompt. */
 const MAX_RELATED_FILES = 4;
-
-/** Max chars of related-file snippets in total. */
-const MAX_RELATED_TOTAL = 4_000;
 
 /** Source file extensions considered "code". */
 const CODE_EXTS = new Set([

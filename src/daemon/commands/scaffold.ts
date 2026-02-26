@@ -50,13 +50,12 @@ import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/
 import { readFileTruncated } from '../../utils/fs-utils.js';
 import { dispatchToPlugin } from './dispatch.js';
 
+import {
+  MAX_EXAMPLE_CHARS_SCAFFOLD as MAX_EXAMPLE_CHARS,
+  MAX_TOTAL_EXAMPLE_CHARS_SCAFFOLD as MAX_TOTAL_EXAMPLE_CHARS,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Max chars read from a single example file. */
-const MAX_EXAMPLE_CHARS = 8_000;
-
-/** Max total chars across all example files. */
-const MAX_TOTAL_EXAMPLE_CHARS = 20_000;
 
 /** Default maximum number of example files to include in the prompt. */
 const DEFAULT_MAX_EXAMPLES = 3;

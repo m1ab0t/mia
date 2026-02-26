@@ -37,9 +37,7 @@ import { join } from 'path';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
 import { dispatchToPlugin } from './dispatch.js';
 import { extractSection } from './parse-utils.js';
-
-/** Max characters of commit log sent to the plugin. */
-const MAX_LOG_CHARS = 12_000;
+import { MAX_LOG_CHARS_CHANGELOG as MAX_LOG_CHARS } from './config-constants.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

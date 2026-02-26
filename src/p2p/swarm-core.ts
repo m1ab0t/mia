@@ -701,6 +701,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         const old = connections.get(remoteKey)!;
         logger.debug(`[P2P] Replacing stale connection from ${shortKey}`);
         removePeerQueue(old);
+        old.removeAllListeners();
         try { old.destroy(); } catch (err) {
           logger.debug({ err }, '[P2P] Failed to destroy stale connection');
         }
@@ -731,6 +732,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
 
       conn.on('close', () => {
         clearTimeout(stabilityTimer);
+        conn.removeAllListeners();
         if (connections.get(connKey) !== conn) return;
         connections.delete(connKey);
         removePeerQueue(conn);
@@ -740,6 +742,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       });
       conn.on('error', (err: Error) => {
         clearTimeout(stabilityTimer);
+        conn.removeAllListeners();
         if (connections.get(connKey) !== conn) return;
         connections.delete(connKey);
         removePeerQueue(conn);
@@ -781,6 +784,7 @@ export async function disconnectP2P(): Promise<void> {
   if (swarm) {
     for (const conn of connections.values()) {
       removePeerQueue(conn);
+      conn.removeAllListeners();
       conn.destroy();
     }
     connections.clear();
@@ -840,6 +844,7 @@ export async function joinP2PSwarm(
 
       conn.on('close', () => {
         clearTimeout(clientStabilityTimer);
+        conn.removeAllListeners();
         if (connections.get(remoteKey) === conn) {
           connections.delete(remoteKey);
           removePeerQueue(conn);
@@ -850,6 +855,7 @@ export async function joinP2PSwarm(
 
       conn.on('error', (err: Error) => {
         clearTimeout(clientStabilityTimer);
+        conn.removeAllListeners();
         logger.error({ err }, '[P2P] Connection error');
         if (connections.get(remoteKey) === conn) {
           connections.delete(remoteKey);
