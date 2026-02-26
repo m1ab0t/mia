@@ -1,256 +1,125 @@
 # mia
 
-[![npm version](https://badge.fury.io/js/mia-agent.svg)](https://www.npmjs.com/package/mia-agent)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Anthropic](https://img.shields.io/badge/Anthropic-Claude-blue)](https://www.anthropic.com)
-[![OpenAI](https://img.shields.io/badge/OpenAI-GPT-green)](https://openai.com)
-[![200+ LLMs](https://img.shields.io/badge/LLMs-200%2B-orange)](https://github.com/twinnydotdev/fluency.js)
 
-A distributed, multi-provider AI coding assistant with P2P networking, native tool calling, trajectory-aware conversation management, and pluggable coding agent support.
+A distributed AI coding assistant with P2P networking, native tool calling, and pluggable coding agent support. Powered by Claude.
 
-> mia knows your codebase, syncs across devices, routes conversations intelligently, and delegates specialized coding tasks to best-in-class coding agents.
+> mia knows your codebase, syncs across devices, and delegates specialized coding tasks to best-in-class coding agents.
 
 ## Table of Contents
 
-- [mia](#mia)
-  - [Table of Contents](#table-of-contents)
-  - [What is mia?](#what-is-mia)
-    - [Why mia?](#why-mia)
-  - [Features](#features)
-  - [Supported Providers](#supported-providers)
-  - [Coding Agent Plugins](#coding-agent-plugins)
-    - [How Delegation Works](#how-delegation-works)
-  - [Installation](#installation)
-    - [Global Installation (Recommended)](#global-installation-recommended)
-    - [Local Installation](#local-installation)
-    - [From Source](#from-source)
-  - [Quick Start](#quick-start)
-    - [With Anthropic (Claude)](#with-anthropic-claude)
-    - [With OpenAI (GPT)](#with-openai-gpt)
-    - [With a Local Model (Ollama)](#with-a-local-model-ollama)
-    - [Start coding (provider-agnostic)](#start-coding-provider-agnostic)
-  - [Built-in Tools](#built-in-tools)
-    - [Core Tools](#core-tools)
-  - [Usage](#usage)
-    - [CLI Interface](#cli-interface)
-    - [Daemon Mode](#daemon-mode)
-    - [AI Workflow Commands](#ai-workflow-commands)
-      - [mia commit](#mia-commit)
-      - [mia pr](#mia-pr)
-      - [mia standup](#mia-standup)
-      - [mia changelog](#mia-changelog)
-      - [mia explain](#mia-explain)
-      - [mia test](#mia-test)
-      - [mia review](#mia-review)
-      - [mia recap](#mia-recap)
-      - [mia watch](#mia-watch)
-      - [mia fix](#mia-fix)
-      - [mia run](#mia-run)
-    - [Developer Utilities](#developer-utilities)
-      - [mia doctor](#mia-doctor)
-      - [mia config](#mia-config)
-      - [mia log](#mia-log)
-      - [mia usage](#mia-usage)
-      - [mia memory](#mia-memory)
-    - [Full Command Reference](#full-command-reference)
-    - [Authentication](#authentication)
-    - [Library API](#library-api)
-    - [Mobile App](#mobile-app)
-    - [Telegram Bot](#telegram-bot)
-    - [P2P Mode](#p2p-mode)
-  - [Configuration](#configuration)
-    - [Environment Variables](#environment-variables)
-    - [Config File](#config-file)
-  - [Architecture](#architecture)
-  - [Contributing](#contributing)
-  - [License](#license)
+- [What is mia?](#what-is-mia)
+- [Features](#features)
+- [Coding Agent Plugins](#coding-agent-plugins)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Built-in Tools](#built-in-tools)
+- [Usage](#usage)
+  - [CLI Interface](#cli-interface)
+  - [Daemon Mode](#daemon-mode)
+  - [AI Workflow Commands](#ai-workflow-commands)
+  - [Developer Utilities](#developer-utilities)
+  - [Full Command Reference](#full-command-reference)
+  - [Authentication](#authentication)
+  - [Mobile App](#mobile-app)
+  - [P2P Mode](#p2p-mode)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## What is mia?
 
-mia is a distributed, **provider-agnostic** AI coding agent that runs on your machine, syncs across devices via P2P networking, and intelligently routes conversations between CLI and mobile interfaces. Built with [fluency.js](https://github.com/twinnydotdev/fluency.js) for multi-provider LLM support — including Anthropic, OpenAI, and 200+ additional LLMs — and the **Dyad protocol** for peer-to-peer agent communication.
+mia is a distributed AI coding agent that runs on your machine, syncs across devices via P2P networking, and intelligently routes conversations between CLI and mobile interfaces. It uses the Anthropic Claude API and the **Hyperswarm** protocol for peer-to-peer agent communication.
 
-When complex coding tasks require a specialized environment, mia **intelligently delegates to pluggable coding agents** such as Claude Code, OpenCode, or OpenAI Codex — treating each as a first-class plugin rather than a hard dependency. This means you choose the tools that fit your workflow.
+When complex coding tasks require a specialized environment, mia **delegates to pluggable coding agents** such as Claude Code or OpenCode — treating each as a first-class plugin.
 
-**Unique Features:**
-- **Provider-Agnostic by Design**: Swap between Anthropic, OpenAI, or any of 200+ supported LLMs without changing your workflow
-- **Pluggable Coding Agents**: Delegate specialized coding tasks to Claude Code, OpenCode, OpenAI Codex, or any compatible agent
-- **AI Workflow Commands**: `mia commit`, `mia pr`, `mia standup`, `mia changelog`, `mia explain`, `mia test`, `mia review`, and more
-- **Trajectory Classification**: Automatically detects whether conversations belong on mobile or desktop
+**Key Features:**
+- **Claude-Powered**: Uses the Anthropic Claude API with support for Claude Max subscription auth
+- **Pluggable Coding Agents**: Delegate specialized coding tasks to Claude Code, OpenCode, or OpenAI Codex
+- **30+ AI Workflow Commands**: `commit`, `pr`, `review`, `test`, `debug`, `refactor`, `scaffold`, `migrate`, `plan`, `task`, and more
 - **P2P Sync**: Conversations sync in real-time across CLI and mobile using Hyperswarm DHT
-- **Daemon Scheduler**: Background task scheduling for periodic jobs (workspace snapshots, mobile builds)
-- **Message Persistence**: Intermediate tool messages preserved across conversation switches
-
-### Why mia?
-
-- **Provider-Agnostic**: Use Anthropic, OpenAI, or 200+ other LLMs — switch providers without reconfiguring your workflow
-- **Pluggable Coding Agents**: Intelligently delegate to Claude Code, OpenCode, or OpenAI Codex as specialized coding plugins
-- **Developer Workflow Automation**: AI-powered commands for your entire Git workflow — commits, PRs, standups, changelogs, reviews
-- **Distributed First**: Built for multi-device workflows — code on desktop, monitor on mobile
-- **Token Efficient**: Compact system prompts and native tool calling reduce API costs
-- **Context-Aware**: Automatic codebase context injection with workspace snapshots
-- **Extensible**: Dyad protocol enables custom agent tools and P2P extensions
-- **Multi-Interface**: CLI, daemon, Telegram bot, React Native mobile app, or library API
-- **Zero-Config P2P**: QR code pairing, no servers, no cloud dependencies
+- **Daemon + Scheduler**: Background service with cron-based task scheduling
+- **Vector Memory**: Persistent memory across sessions via LanceDB with ONNX reranking
+- **Message Persistence**: Tool outputs preserved across conversation switches
 
 ## Features
 
 **Core Capabilities:**
-- **Multi-Provider LLM Support**: Anthropic (Claude), OpenAI (GPT), and 200+ LLMs via fluency.js
-- **Pluggable Coding Agents**: Intelligent delegation to Claude Code, OpenCode, OpenAI Codex, or custom agents
-- **AI Workflow Commands**: `commit`, `pr`, `standup`, `changelog`, `explain`, `test`, `review`, `recap`, `watch`, `fix`
-- **Trajectory Classification**: AI-powered routing of conversations to CLI or mobile based on context
+- **AI Workflow Commands**: 30+ commands covering your full dev workflow
 - **P2P Sync**: Real-time conversation sync across devices using Hyperswarm DHT
-- **Message Persistence**: Intermediate tool outputs preserved across conversation switches
-- **Daemon Scheduler**: Background tasks with cron scheduling (workspace snapshots, builds)
+- **Pluggable Coding Agents**: Claude Code, OpenCode, OpenAI Codex as first-class plugins
+- **Daemon Scheduler**: Background tasks with cron scheduling
 - **Token Efficient**: Minimal system prompt, native tool calling reduces overhead
 - **Codebase Context**: Automatic injection of project structure, languages, and file paths
+- **Message Persistence**: Intermediate tool outputs preserved across conversation switches
 
 **LLM & Tools:**
-- **Multi-Provider**: Supports 200+ LLMs from 10+ providers via fluency.js
+- **Claude API**: Anthropic Claude via `@anthropic-ai/sdk`
 - **Native Tool Calling**: OpenAI-compatible function calling for reliable execution
 - **File Operations**: Execute shell commands, write files, and edit code
-- **Code Editing**: search_and_replace and apply_diff for precise modifications
-- **Memory & Scheduling**: Persistent memory (LanceDB) and cron-based tasks
+- **Code Editing**: `search_and_replace` and `apply_diff` for precise modifications
+- **Memory & Scheduling**: Persistent vector memory (LanceDB) and cron-based tasks
 - **Web Access**: Built-in web search and HTTP request capabilities
+- **Semantic Search**: Natural-language code search across your codebase
 
 **Interfaces:**
-- **CLI**: Interactive terminal interface with rich features
-- **Daemon Mode**: Background service with API access
-- **Mobile App**: React Native/Expo app with QR code pairing
-- **Telegram Bot**: Chat with mia from Telegram
-- **Library API**: Embed mia in Node.js applications
-
-**Architecture:**
-- **Dyad Protocol**: Custom P2P agent communication protocol
-- **Plugin System**: Coding agent plugin architecture for delegating to specialized agents
-- **Type-Safe**: Written in TypeScript with full type definitions
-- **Setup Automation**: One-command setup script for fresh installations
-
-## Supported Providers
-
-mia is provider-agnostic by design. It uses [fluency.js](https://github.com/twinnydotdev/fluency.js) to support a wide range of LLM providers out of the box:
-
-| Provider | Example Models | API Key Variable |
-|----------|---------------|-----------------|
-| **Anthropic** | claude-sonnet-4, claude-opus-4 | `ANTHROPIC_API_KEY` |
-| **OpenAI** | gpt-4o, gpt-4-turbo, o1 | `OPENAI_API_KEY` |
-| **Google** | gemini-pro, gemini-flash | `GOOGLE_API_KEY` |
-| **Mistral** | mistral-large, mistral-small | `MISTRAL_API_KEY` |
-| **Cohere** | command-r, command-r-plus | `COHERE_API_KEY` |
-| **OpenRouter** | 100+ models via single API | `OPENROUTER_API_KEY` |
-| **Ollama** | llama3, mistral, phi3 (local) | _(no key required)_ |
-| **And more...** | 200+ models across 10+ providers | via fluency.js |
-
-Set the relevant API key and specify your preferred model via `MIA_MODEL` or the `model` option in the Library API.
+- **CLI**: Interactive terminal interface
+- **Daemon Mode**: Background service
+- **Mobile App**: React Native/Expo app with QR code pairing (separate repo: `mia-expo`)
 
 ## Coding Agent Plugins
 
-mia supports **pluggable coding agents** — specialized tools that handle complex, multi-step coding tasks through intelligent delegation. Rather than being locked into a single coding agent, mia treats each as a first-class plugin.
-
-When mia determines that a task warrants a specialized coding environment (e.g., large refactors, multi-file edits, or interactive agentic sessions), it delegates intelligently to the configured coding agent plugin.
+mia supports **pluggable coding agents** for complex, multi-step coding tasks. Rather than being locked into a single coding agent, mia treats each as a first-class plugin.
 
 | Plugin | Description | Requirements |
 |--------|-------------|--------------|
-| **Claude Code** | Anthropic's agentic coding assistant — deep reasoning and multi-file editing | `npm install -g @anthropic-ai/claude-code`, `ANTHROPIC_API_KEY` |
+| **Claude Code** | Anthropic's agentic coding assistant | `npm install -g @anthropic-ai/claude-code` |
 | **OpenCode** | Open-source, provider-agnostic coding agent | `npm install -g opencode-ai` |
-| **OpenAI Codex** | OpenAI's coding agent with GPT-4o backend | `npm install -g @openai/codex`, `OPENAI_API_KEY` |
+| **OpenAI Codex** | OpenAI's coding agent | `npm install -g @openai/codex`, `OPENAI_API_KEY` |
 
-### How Delegation Works
+Switch between plugins at any time:
 
-mia's trajectory classification engine analyzes each conversation and decides whether to:
-
-1. **Handle the task natively** using mia's built-in tools (file ops, shell, search, memory)
-2. **Delegate to a coding agent plugin** for tasks that benefit from a specialized agentic loop
-
-This delegation is transparent — mia manages the handoff, collects results, and continues the conversation seamlessly. You interact with mia; mia coordinates with the best tool for the job.
+```bash
+mia plugin list
+mia plugin switch opencode
+mia plugin switch claude-code
+mia plugin info opencode
+```
 
 ## Installation
 
-### Global Installation (Recommended)
-
-```bash
-npm install -g mia-agent
-```
-
-### Local Installation
-
-```bash
-npm install mia-agent
-```
-
-### From Source
+mia is installed from source.
 
 ```bash
 git clone https://github.com/rjmacarthy/mia.git
 cd mia
-npm run setup  # Automated setup script
-# Or manually:
 npm install
 npm run build
 npm run link
 ```
 
+Or use the automated setup script:
+
+```bash
+npm run setup
+```
+
 ## Quick Start
 
-mia works with any supported LLM provider. Below are examples for Anthropic and OpenAI — pick the one that fits your setup.
+1. **Install mia** (see above)
 
-### With Anthropic (Claude)
-
-1. **Install mia**:
-   ```bash
-   npm install -g mia-agent
-   ```
-
-2. **Get an API key** from [Anthropic Console](https://console.anthropic.com/)
-
-3. **Configure authentication**:
+2. **Authenticate** with your Anthropic API key or Claude Max subscription:
    ```bash
    mia auth
-   # Or set the environment variable directly:
-   export ANTHROPIC_API_KEY=your-key-here
    ```
+   This walks you through linking a Claude Max/Pro subscription via `claude setup-token`, or lets you paste an API key directly. The token is saved to `~/.mia/.env`.
 
-4. **Start mia**:
+3. **Start mia**:
    ```bash
    mia
    ```
-
-### With OpenAI (GPT)
-
-1. **Install mia**:
-   ```bash
-   npm install -g mia-agent
-   ```
-
-2. **Get an API key** from [OpenAI Platform](https://platform.openai.com/)
-
-3. **Configure authentication**:
-   ```bash
-   export OPENAI_API_KEY=your-key-here
-   export MIA_MODEL=gpt-4o
-   ```
-
-4. **Start mia**:
-   ```bash
-   mia
-   ```
-
-### With a Local Model (Ollama)
-
-1. **Install [Ollama](https://ollama.com) and pull a model**:
-   ```bash
-   ollama pull llama3
-   ```
-
-2. **Start mia pointing at your local Ollama instance**:
-   ```bash
-   export MIA_MODEL=ollama/llama3
-   mia
-   ```
-
-### Start coding (provider-agnostic)
-
-Regardless of which provider you use, the workflow is the same:
 
 ```
 > Read the package.json and tell me about this project
@@ -260,10 +129,6 @@ Regardless of which provider you use, the workflow is the same:
 ```
 
 ## Built-in Tools
-
-mia provides a streamlined set of powerful tools:
-
-### Core Tools
 
 | Tool | Description |
 |------|-------------|
@@ -276,13 +141,9 @@ mia provides a streamlined set of powerful tools:
 | `web` | Search the web and make HTTP requests |
 | `attempt_completion` | Signal task completion with summary |
 
-The `execute_command` tool provides access to the full shell environment, enabling file reading (cat, head, tail), searching (grep, find), file operations (cp, mv, rm), system info (uname, free), networking (curl, ping), and more.
-
 ## Usage
 
 ### CLI Interface
-
-The interactive CLI provides a rich terminal experience:
 
 ```bash
 # Start interactive chat
@@ -290,6 +151,12 @@ mia chat
 
 # Or simply run mia with no arguments
 mia
+
+# Send a single prompt
+mia ask "what does this codebase do"
+
+# Pipe input
+git diff | mia ask --raw "write a commit message"
 ```
 
 **In-session commands:**
@@ -301,25 +168,23 @@ mia
 | `/tokens` | Show token usage statistics |
 | `/exit` | Exit the application |
 
+**Chat flags:**
+
+```bash
+mia chat --resume chat-20240115-abc   # resume a previous conversation
+mia chat --list                        # list saved conversations
+```
+
 ### Daemon Mode
 
 Run mia as a background service:
 
 ```bash
-# Start daemon
-mia start
-
-# Check status
-mia status
-
-# View logs
-mia logs
-
-# Stop daemon
-mia stop
-
-# Restart daemon
-mia restart
+mia start    # start the daemon
+mia status   # check status
+mia logs     # stream logs
+mia stop     # stop the daemon
+mia restart  # restart the daemon
 ```
 
 ### AI Workflow Commands
@@ -328,47 +193,42 @@ mia includes AI-powered commands that integrate directly into your development w
 
 #### mia commit
 
-Generate a conventional commit message from your staged diff using AI:
+Generate a conventional commit message from your staged diff:
 
 ```bash
-# Stage everything and commit
-mia commit --all
-
-# Preview the message without committing
-mia commit --dry-run
-
-# Commit and push in one step
-mia commit --push
-
-# Skip the confirmation prompt
-mia commit --yes
-
-# Print just the message (for piping)
-mia commit --message-only
+mia commit              # generate and confirm
+mia commit --all        # stage everything first
+mia commit --dry-run    # preview without committing
+mia commit --push       # commit and push
+mia commit --yes        # skip confirmation
+mia commit --message-only  # print just the message (for piping)
 ```
 
 #### mia pr
 
-Generate a pull request title and description from your branch's commit history, then create it via `gh`:
+Generate a pull request title and description, then create it via `gh`:
 
 ```bash
-# Auto-detect base branch and create PR
-mia pr
+mia pr                  # auto-detect base branch
+mia pr --base main      # specify base branch
+mia pr --draft          # create as a draft
+mia pr --dry-run        # preview without creating
+mia pr --push           # push branch before creating
+mia pr --yes --web      # skip confirmation, open in browser
+mia pr --title-only     # print just the title
+```
 
-# Specify base branch
-mia pr --base main
+#### mia review
 
-# Create as a draft
-mia pr --draft
+AI code review with a structured verdict (LGTM / MINOR_ISSUES / NEEDS_WORK):
 
-# Preview content without creating
-mia pr --dry-run
-
-# Push the branch before creating
-mia pr --push
-
-# Skip confirmation, open in browser after creation
-mia pr --yes --web
+```bash
+mia review              # review staged changes
+mia review --staged     # staged changes only
+mia review --unstaged   # unstaged changes only
+mia review --base main  # branch diff vs base
+mia review --file src/auth.ts  # scope to a single file
+mia review --raw        # plain text for piping
 ```
 
 #### mia standup
@@ -376,20 +236,11 @@ mia pr --yes --web
 Generate an AI standup report from recent commits and mia activity:
 
 ```bash
-# Today's standup (last 24 hours)
-mia standup
-
-# Yesterday's window
-mia standup --yesterday
-
-# Custom look-back window
-mia standup --hours 48
-
-# Include activity from multiple repos
-mia standup --repos ~/project-a,~/project-b
-
-# Plain text for piping to Slack/Telegram
-mia standup --raw
+mia standup                          # today (last 24 hours)
+mia standup --yesterday              # yesterday's window
+mia standup --hours 48               # custom look-back
+mia standup --repos ~/a,~/b          # include multiple repos
+mia standup --raw                    # plain text for piping
 ```
 
 #### mia changelog
@@ -397,95 +248,147 @@ mia standup --raw
 Generate an AI-powered changelog from your git history:
 
 ```bash
-# From last tag to HEAD
-mia changelog
-
-# Between specific refs
+mia changelog                        # last tag to HEAD
 mia changelog --from v1.0.0 --to v2.0.0
-
-# Label the version
 mia changelog --version 1.3.0
-
-# Prepend to CHANGELOG.md
-mia changelog --write
-
-# Preview the prompt without dispatching
+mia changelog --write                # prepend to CHANGELOG.md
 mia changelog --dry-run
 ```
 
 #### mia explain
 
-Get an AI explanation of any file, directory, function, or concept in your codebase:
+AI explanation of any file, directory, function, or concept:
 
 ```bash
-# Explain a file
 mia explain src/auth.ts
-
-# Explain a whole directory
 mia explain src/auth/
-
-# Focus on a specific function or class
 mia explain src/auth.ts --fn verifyToken
-
-# Answer a conceptual question about the codebase
 mia explain --query "how does the plugin delegation work"
-
-# Control explanation depth
 mia explain src/auth.ts --depth deep   # shallow | normal | deep
 ```
 
 #### mia test
 
-Generate a test file for any source file using AI:
+Generate a test file for any source file:
 
 ```bash
-# Generate tests for a source file (prints to stdout)
-mia test src/utils.ts
-
-# Write test file to disk alongside the source
-mia test src/utils.ts --write
-
-# Specify a custom output path
+mia test src/utils.ts               # print to stdout
+mia test src/utils.ts --write       # write alongside source
+mia test src/utils.ts --run         # write and run immediately
 mia test src/utils.ts --output src/__tests__/utils.test.ts
-
-# Preview the prompt without dispatching
-mia test src/utils.ts --dry-run
+mia test src/utils.ts --runner vitest  # vitest | jest | mocha | node
 ```
 
-#### mia review
+#### mia debug
 
-Run an AI code review on your current diff or staged changes:
+AI error forensics — root cause, location, and fix:
 
 ```bash
-# Review staged changes
-mia review
-
-# Review a specific file
-mia review src/auth.ts
-
-# Review a full diff between refs
-mia review --from main --to HEAD
-
-# Output plain text for piping
-mia review --raw
+mia debug "TypeError: foo is undefined"
+mia debug --file src/auth.ts "null ref"
+mia debug --depth deep "ECONNREFUSED"
+npm test 2>&1 | mia debug --raw
 ```
 
-#### mia recap
+#### mia refactor
 
-Get an AI-generated daily digest of your dispatches, commits, and tool usage:
+AI-powered code refactoring with optional write-back:
 
 ```bash
-# Today's recap
-mia recap
+mia refactor src/auth.ts "split into smaller functions"
+mia refactor src/utils.ts --goal "modernize async/await"
+mia refactor src/utils.ts "improve errors" --write
+mia refactor src/db.ts --write --diff    # show coloured diff after write
+```
 
-# Yesterday's recap
-mia recap --yesterday
+#### mia scaffold
 
-# Specific date
-mia recap --date 2026-01-15
+Generate a new file following your codebase patterns:
 
-# Machine-readable JSON
-mia recap --json
+```bash
+mia scaffold src/utils/date.ts "date formatting"
+mia scaffold src/services/email.ts --desc "email sender"
+mia scaffold src/utils/date.ts --write
+```
+
+#### mia migrate
+
+AI codebase-wide migration — apply a consistent change across many files:
+
+```bash
+mia migrate "convert require() to import" --dir src
+mia migrate "replace var with const" --dir src --write
+mia migrate "add JSDoc" --files src/a.ts,src/b.ts
+mia migrate "goal" --ext .ts,.js --max-files 30
+```
+
+#### mia suggest
+
+AI proactive improvement suggestions across security, perf, types, tests, and maintainability:
+
+```bash
+mia suggest src/auth.ts
+mia suggest src/auth.ts --category security
+mia suggest src/ --limit 5
+mia suggest src/auth.ts --apply    # refactor and write back high-priority fixes
+```
+
+#### mia plan
+
+AI task decomposition — break a complex goal into numbered, prioritised steps:
+
+```bash
+mia plan "migrate from Express to Fastify"
+mia plan "add OAuth" --depth deep
+mia plan "add OAuth" --write          # save to plan.md
+mia plan "add OAuth" --output my-plan.md
+```
+
+#### mia task
+
+AI multi-step autonomous task execution:
+
+```bash
+mia task "add JWT auth to the API"
+mia task "goal" --max-steps 5
+mia task "goal" --dry-run             # plan only, no execution
+mia task "add tests" --cwd ~/project
+```
+
+#### mia todo
+
+Scan codebase for TODO/FIXME/HACK/XXX/BUG debt markers and optionally resolve them:
+
+```bash
+mia todo                              # scan all markers
+mia todo --path src/auth/
+mia todo --type fixme,bug
+mia todo --fix 3                      # AI-resolve item #3
+mia todo --analyze                    # AI-prioritise all markers
+```
+
+#### mia audit
+
+Security audit — package vulnerabilities, secret scanning, AI-synthesized report:
+
+```bash
+mia audit
+mia audit --dir ~/project
+mia audit --no-secrets                # skip secret scanning
+mia audit --raw > report.txt
+mia audit --json
+```
+
+#### mia coverage
+
+Coverage-aware test generation — reads Istanbul/v8 report, generates targeted tests:
+
+```bash
+mia coverage                          # process all under-covered files
+mia coverage src/utils.ts             # target a specific file
+mia coverage --threshold 90           # target files below 90%
+mia coverage --write                  # write test files to disk
+mia coverage --write --run            # write and run immediately
 ```
 
 #### mia watch
@@ -493,19 +396,10 @@ mia recap --json
 Watch files and automatically dispatch AI prompts on save:
 
 ```bash
-# Watch with default mode (code review on save)
-mia watch
-
-# Switch modes: review | test | fix | docs
-mia watch --mode test
-
-# Custom prompt template ({files} is substituted)
+mia watch                             # review mode (default)
+mia watch --mode test                 # review | test | fix | docs
 mia watch --prompt "Review security implications of: {files}"
-
-# Tune debounce and minimum dispatch interval
 mia watch --debounce 3000 --min-interval 10000
-
-# Preview what would be dispatched without running
 mia watch --dry-run
 ```
 
@@ -514,13 +408,8 @@ mia watch --dry-run
 Run a command and automatically fix failures in a loop:
 
 ```bash
-# Run and auto-fix
 mia fix "npm test"
-
-# Limit fix cycles
 mia fix --max-retries 3 "npm test"
-
-# Add context for the fixer
 mia fix --prompt "this project uses pnpm" "pnpm test"
 ```
 
@@ -529,48 +418,54 @@ mia fix --prompt "this project uses pnpm" "pnpm test"
 Run a command with optional auto-fix on failure:
 
 ```bash
-# Run once, fix on failure (default 3 retries)
 mia run "npm test"
-
-# More retries
 mia run "npm test" --max-retries 5
-
-# Run once without auto-fix
 mia run "npm test" --no-fix
-
-# Skip per-fix confirmation prompts
 mia run "npm test" --yes
-
-# Custom timeout
 mia run "npm test" --timeout 60000
+```
+
+#### mia search
+
+Semantic code search — find files by natural language:
+
+```bash
+mia search "where is auth handled"
+mia search --files "auth" | xargs mia explain
+mia search --limit 5 "payments"
+mia search --pattern "*.ts" "async queue"
+```
+
+#### mia recap
+
+Daily digest of dispatches, commits, and tools used:
+
+```bash
+mia recap
+mia recap --yesterday
+mia recap --date 2026-01-15
+mia recap --json
 ```
 
 ### Developer Utilities
 
 #### mia doctor
 
-Run a workspace health diagnostics check:
+Workspace health diagnostics — daemon status, plugin availability, API key config, memory health, scheduler state:
 
 ```bash
 mia doctor
 ```
 
-Reports on: daemon status, plugin availability, API key configuration, memory health, scheduler state, and codebase context.
-
 #### mia config
 
-View and edit mia's configuration:
+View and edit mia's runtime configuration:
 
 ```bash
-# Show all current configuration
-mia config
-
-# Read a specific value
+mia config                            # show all config
 mia config get activePlugin
-
-# Write a value
-mia config set maxConcurrency 5
 mia config set activePlugin opencode
+mia config set maxConcurrency 5
 ```
 
 #### mia log
@@ -578,16 +473,9 @@ mia config set activePlugin opencode
 Browse recent dispatch history with git context:
 
 ```bash
-# Last 20 dispatches (default)
-mia log
-
-# Show more entries
+mia log                               # last 20 dispatches
 mia log --n 50
-
-# Filter to failed dispatches only
 mia log --failed
-
-# Filter by conversation ID
 mia log --conv chat-20240115-abc
 ```
 
@@ -596,13 +484,8 @@ mia log --conv chat-20240115-abc
 View token usage and activity stats:
 
 ```bash
-# Today's dispatches, duration, and tools used
 mia usage today
-
-# Last 7 days
 mia usage week
-
-# All available trace history
 mia usage all
 ```
 
@@ -611,16 +494,9 @@ mia usage all
 View and manage mia's persistent memory:
 
 ```bash
-# List recent facts
 mia memory list
-
-# Search by query
 mia memory search "pnpm"
-
-# Manually store a fact
 mia memory add "this project uses pnpm workspaces"
-
-# Show counts by memory type
 mia memory stats
 ```
 
@@ -635,15 +511,26 @@ mia memory stats
 | `mia restart` | Restart the daemon |
 | `mia status` | Show daemon status |
 | `mia logs` | Stream daemon logs |
-| `mia auth` | Manage API keys |
+| `mia auth` | Manage API keys / Claude Max auth |
 | `mia setup` | First-time setup |
 | `mia commit` | AI-generated commit message from staged diff |
-| `mia pr` | AI-generated PR title and description, then create via gh |
+| `mia pr` | AI-generated PR title and description, created via `gh` |
+| `mia review` | AI code review with structured verdict |
 | `mia standup` | AI standup from recent commits and mia activity |
 | `mia changelog` | AI-generated changelog from git history |
 | `mia explain <file\|dir>` | AI explanation of any file, directory, or concept |
 | `mia test <file>` | AI-generated test file for a source file |
-| `mia review` | AI code review of current diff |
+| `mia debug <error>` | AI error forensics — root cause, location, fix |
+| `mia refactor <file>` | AI-powered code refactoring with optional write-back |
+| `mia scaffold <path>` | AI code scaffolding from existing patterns |
+| `mia migrate <goal>` | AI codebase-wide multi-file migration |
+| `mia suggest <file\|dir>` | AI proactive code improvement suggestions |
+| `mia plan <goal>` | AI task decomposition into actionable steps |
+| `mia task <goal>` | AI multi-step autonomous task execution |
+| `mia todo` | Scan and AI-resolve TODO/FIXME/HACK/XXX debt markers |
+| `mia audit` | Security audit: package vulns, secret scanning |
+| `mia coverage` | Coverage-aware test generation from Istanbul/v8 reports |
+| `mia search <query>` | Semantic code search by natural language |
 | `mia recap` | Daily digest: dispatches, commits, tools used |
 | `mia watch` | Watch files and auto-dispatch AI prompts on save |
 | `mia fix <cmd>` | Run a command and auto-fix failures in a loop |
@@ -659,132 +546,56 @@ mia memory stats
 
 ### Authentication
 
-Configure API keys for your chosen provider:
-
 ```bash
 mia auth
 ```
 
-Or create `~/.mia/.env` with the key(s) for your providers:
+mia supports two auth methods:
+
+1. **Claude Max/Pro subscription** — uses `claude setup-token` to generate a long-lived API token from your subscription (requires Claude CLI: `npm install -g @anthropic-ai/claude-code`)
+2. **API key** — paste an Anthropic API key directly (`sk-ant-...`)
+
+The token is saved to `~/.mia/.env` with `0600` permissions.
 
 ```bash
-# Anthropic
-ANTHROPIC_API_KEY=your-key-here
-
-# OpenAI
-OPENAI_API_KEY=your-key-here
-
-# Google
-GOOGLE_API_KEY=your-key-here
+mia auth status   # check current auth
+mia auth logout   # clear saved token
 ```
 
-### Library API
+Or set the environment variable directly:
 
-Use mia programmatically in your Node.js applications. The `model` field accepts any fluency.js-compatible model string:
-
-```typescript
-import { Agent } from '@mia/cli';
-
-// Using Anthropic
-const agent = new Agent({
-  model: 'claude-sonnet-4-20250514',
-  apiKey: process.env.ANTHROPIC_API_KEY,
-  workingDirectory: process.cwd(),
-  maxIterations: 200,
-  mode: 'coding', // or 'general'
-});
-
-// Using OpenAI — same API, different model
-const agentOpenAI = new Agent({
-  model: 'gpt-4o',
-  apiKey: process.env.OPENAI_API_KEY,
-  workingDirectory: process.cwd(),
-  maxIterations: 200,
-  mode: 'coding',
-});
-
-// Initialize (gathers codebase context)
-await agent.init();
-
-// Chat - agent uses native tool calling automatically
-const response = await agent.chat('Read the package.json file');
-console.log(response);
-
-// Stream responses with callbacks
-agent.onStreamToken = (token) => process.stdout.write(token);
-agent.onToolCall = (name, params) => console.log(`Calling ${name}`);
-agent.onToolResult = (name, result) => console.log(`Result: ${result}`);
-
-const streamResponse = await agent.chat('Explain this codebase');
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ### Mobile App
 
-A React Native mobile client is available as a separate project:
+A React Native mobile client is available as a separate project (`mia-expo`). It connects to mia agents running in daemon mode using peer-to-peer networking — conversations seamlessly continue across devices.
 
-```bash
-# From the mobile app repo:
-npm run android        # Android device/emulator
-npm run ios            # iOS simulator
-
-# Build release APK for Android
-npm run build:apk
-# Output: android/app/build/outputs/apk/release/app-release.apk
-```
-
-**Mobile-Specific Features:**
-- **Trajectory Routing**: Conversations marked as "mobile" are automatically routed to the app
+**Mobile Features:**
 - **P2P Sync**: Real-time sync with CLI daemon over Hyperswarm DHT (no server required)
 - **QR Code Pairing**: Scan QR from CLI to connect instantly
-- **Status Indicators**: Live connection status for P2P, Telegram, and scheduler
-- **Conversation Management**: Persistent chat history with proper abort/queue handling
-- **Inline Tool Calls**: Tool executions appear directly in the chat thread — no separate Tools view
-- **Collapsible Tool Pills**: Consecutive same-type tool calls are grouped into expandable pill summaries
-- **Auto-Reconnect**: Automatically reconnects to the daemon when the app returns to the foreground
+- **Live Plugin Switching**: `mia plugin switch` updates the active agent in real-time
+- **Collapsible Tool Output**: Tool executions appear inline, grouped into expandable pill summaries
+- **Auto-Reconnect**: Reconnects to the daemon when the app returns to the foreground
 - **Markdown Support**: Full markdown rendering for code blocks and formatting
-- **Cross-Platform**: Built with Expo and React Native (iOS/Android)
-
-The mobile app connects to mia agents running in daemon mode using peer-to-peer networking — conversations seamlessly continue across devices.
-
-### Telegram Bot
-
-Run mia as a Telegram bot:
-
-```bash
-npm run telegram
-```
-
-Configure via `~/.mia/.env`:
-```bash
-TELEGRAM_BOT_TOKEN=your-bot-token
-```
 
 ### P2P Mode
 
-Connect multiple mia instances or mobile apps over peer-to-peer networking using Hyperswarm:
+Connect mobile apps or other mia instances over peer-to-peer networking:
 
 ```bash
-# Start daemon with P2P enabled
-mia start
-
-# Connect mobile app by scanning QR code
-# The CLI will display a QR code for easy pairing
-
-# Check P2P connection status
-mia p2p status
-
-# Show QR code for pairing
-mia p2p qr
-
-# Rotate seed and reconnect
-mia p2p refresh
+mia start          # start daemon with P2P enabled
+mia p2p status     # connection status
+mia p2p qr         # show QR code for pairing
+mia p2p refresh    # rotate seed and reconnect
 ```
 
-P2P networking enables:
-- Mobile app to CLI communication without servers
-- Secure peer-to-peer connections using Hyperswarm DHT
-- Real-time message synchronization with buffered newline-delimited framing
-- Zero-configuration networking with QR code pairing
+P2P networking provides:
+- Mobile-to-CLI communication without servers
+- Secure peer-to-peer connections via Hyperswarm DHT
+- Real-time message synchronisation
+- Zero-configuration pairing via QR code
 
 ## Configuration
 
@@ -792,79 +603,58 @@ P2P networking enables:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `ANTHROPIC_API_KEY` | Anthropic API key (for Claude models) | If using Anthropic |
-| `OPENAI_API_KEY` | OpenAI API key (for GPT / Codex models) | If using OpenAI |
-| `GOOGLE_API_KEY` | Google API key (for Gemini models) | If using Google |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token | For Telegram mode |
-| `MIA_MODEL` | Default model to use (any fluency.js model string) | No |
+| `ANTHROPIC_API_KEY` | Anthropic API key | Yes |
 | `MIA_MAX_ITERATIONS` | Max tool iterations | No (default: 10) |
 
 ### Config File
 
-Create `~/.mia/.env` for persistent configuration:
+`~/.mia/.env` for persistent configuration:
 
 ```bash
-# Provider API keys — set only those you use
-ANTHROPIC_API_KEY=your-anthropic-key
-OPENAI_API_KEY=your-openai-key
-
-# Model selection — any fluency.js compatible model string
-MIA_MODEL=claude-sonnet-4-20250514
-# MIA_MODEL=gpt-4o
-# MIA_MODEL=ollama/llama3
-
+ANTHROPIC_API_KEY=sk-ant-your-key-here
 MIA_MAX_ITERATIONS=15
-
-# Telegram (optional)
-TELEGRAM_BOT_TOKEN=your-bot-token
 ```
 
-Use `mia config set` to change settings at runtime:
+Runtime config lives at `~/.mia/mia.json`. Use `mia config set` to edit it:
 
 ```bash
-# Switch active coding agent plugin
 mia config set activePlugin opencode   # opencode | claude-code | codex
-
-# Adjust concurrency
 mia config set maxConcurrency 5
 ```
 
+Memory is stored at `~/.mia/memory.lance`.
+
 ## Architecture
 
-mia is built as a **distributed, provider-agnostic agent system** with the following layers:
-
 **Agent Core:**
-- **Multi-Provider LLM**: fluency.js powers support for Anthropic, OpenAI, Google, Mistral, Ollama, and 200+ additional LLMs with a unified API
-- **Plugin-Based Coding Agents**: A harness engineering architecture enables intelligent dispatch to Claude Code, OpenCode, OpenAI Codex, or custom agents — each plugin is a first-class, independently loadable module
-- **Trajectory Classification**: AI-powered analysis of conversation context to route messages to CLI, mobile, or a coding agent plugin
-- **Modular Agent Architecture**: The agent core is split into focused modules (conversation, streaming, tool execution, scheduling) rather than a monolithic agent file
-- **Conversation Management**: Persistent message storage with proper abort/queue handling
-- **Native Tool Calling**: OpenAI-compatible function calling via fluency.js
+- **Anthropic SDK**: Claude API via `@anthropic-ai/sdk`
+- **Plugin-Based Coding Agents**: Claude Code, OpenCode (`@opencode-ai/sdk`), and Codex as independently-loadable plugins
+- **Modular Command Architecture**: Each CLI command is a focused module under `src/daemon/commands/`
+- **Native Tool Calling**: OpenAI-compatible function calling schema
 - **Token Tracking**: Built-in token counting and context management
 - **Streaming**: Full streaming support with delta accumulation
 
 **Storage & Scheduling:**
-- **Memory**: Vector-based persistent memory using LanceDB
-- **Scheduler**: Cron-based task scheduling with node-cron (workspace snapshots, builds)
+- **Memory**: Vector-based persistent memory using LanceDB with ONNX reranking
+- **Scheduler**: Cron-based task scheduling with node-cron
 - **Message Persistence**: Intermediate tool outputs preserved across conversation switches
 
-**P2P Networking (Dyad Protocol):**
+**P2P Networking:**
 - **Hyperswarm DHT**: Secure peer-to-peer connections
 - **Conversation Sync**: Real-time message relay between CLI and mobile
-- **QR Code Pairing**: Zero-config device pairing
-- **No Server Required**: Fully decentralized architecture
+- **QR Code Pairing**: Zero-config device pairing via `qrcode-terminal`
 
 **Tech Stack:**
-- TypeScript (fully typed, modern ES modules)
-- fluency.js (multi-provider LLM support — Anthropic, OpenAI, 200+ models)
-- LanceDB (vector memory storage)
+- TypeScript (strict mode, ES2022, ESM)
+- Anthropic Claude (`@anthropic-ai/sdk`)
+- LanceDB + ONNX (vector memory and reranking)
 - Hyperswarm (P2P networking)
-- Expo/React Native (mobile app)
 - Vitest (unit testing)
+- esbuild (bundling)
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+Contributions are welcome. Please open an issue or pull request.
 
 ## License
 
