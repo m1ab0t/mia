@@ -30,6 +30,13 @@ const QUERY_CACHE_MAX_ENTRIES_DEFAULT = 256;
 /** Default TTL for LanceDB memory entries: 30 days in milliseconds. */
 export const DEFAULT_MEMORY_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * Default maximum number of rows the LanceDB memories table may hold.
+ * When the cap is exceeded on insert, the oldest entries are evicted (FIFO).
+ * Set `maxRows: 0` in MemoryStoreOptions to disable the cap entirely.
+ */
+export const DEFAULT_MEMORY_MAX_ROWS = 10_000;
+
 interface QueryCacheEntry {
   results: MemorySearchResult[];
   expiresAt: number;
@@ -43,6 +50,15 @@ export interface MemoryStoreOptions {
    * Default: 256.
    */
   maxCacheEntries?: number;
+  /**
+   * Maximum number of rows the LanceDB memories table may hold.
+   * When a new entry is inserted and the total row count exceeds this limit,
+   * the oldest entries (by `timestamp`) are evicted until the count is back
+   * at or below the cap (FIFO eviction).
+   * Set to 0 to disable the cap entirely.
+   * Default: 10 000.
+   */
+  maxRows?: number;
 }
 
 /** Parse metadata stored as a JSON string back into an object. */
@@ -102,8 +118,25 @@ export class MemoryStore {
   private _cacheMisses = 0;
   private _cacheEvictions = 0;
 
+  /**
+   * Maximum number of rows allowed in the memories table.  0 = unlimited.
+   * When exceeded on insert, the oldest rows are evicted (FIFO).
+   */
+  private maxRows: number;
+
+  /**
+   * Cached total row count — null means "not yet initialised".
+   * Kept in sync on every insert, prune, and clear so _enforceRowCap() can
+   * skip the count scan whenever the cached value is already known.
+   */
+  private _rowCount: number | null = null;
+
+  /** Lifetime count of rows evicted by the FIFO row cap. */
+  private _rowCapEvictions = 0;
+
   constructor(opts: MemoryStoreOptions = {}) {
     this.maxCacheEntries = opts.maxCacheEntries ?? QUERY_CACHE_MAX_ENTRIES_DEFAULT;
+    this.maxRows = opts.maxRows ?? DEFAULT_MEMORY_MAX_ROWS;
   }
 
   /**
@@ -380,6 +413,90 @@ export class MemoryStore {
     });
   }
 
+  // ── Row-cap helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Perform a paginated full-table count and cache the result in `_rowCount`.
+   * No-ops if the count is already known.
+   */
+  private async _initRowCount(): Promise<void> {
+    if (this._rowCount !== null) return;
+    try {
+      const table = await this.getTable();
+      if (!table) { this._rowCount = 0; return; }
+      let count = 0;
+      let offset = 0;
+      while (true) {
+        const page = await table.query().limit(SCAN_PAGE_SIZE).offset(offset).toArray();
+        if (page.length === 0) break;
+        count += page.length;
+        if (page.length < SCAN_PAGE_SIZE) break;
+        offset += SCAN_PAGE_SIZE;
+      }
+      this._rowCount = count;
+    } catch {
+      // Non-fatal — cap enforcement will be attempted again on next insert.
+      this._rowCount = 0;
+    }
+  }
+
+  /**
+   * Evict the oldest `(rowCount - maxRows)` entries from the table by
+   * deleting all rows whose `timestamp` is ≤ the timestamp of the last
+   * row that must go.
+   *
+   * Called automatically after every successful `store()`.  No-ops when
+   * `maxRows` is 0 (disabled) or the table is within its cap.
+   */
+  private async _enforceRowCap(): Promise<void> {
+    if (!this.maxRows || !this.db) return;
+
+    if (this._rowCount === null) await this._initRowCount();
+
+    const excess = (this._rowCount ?? 0) - this.maxRows;
+    if (excess <= 0) return;
+
+    const table = await this.getTable();
+    if (!table) return;
+
+    // Collect timestamps from the table — we only need `excess + 1` values to
+    // determine the cutoff, but we fetch in SCAN_PAGE_SIZE chunks so we don't
+    // end up with tiny reads. Stop as soon as we have enough.
+    const timestamps: number[] = [];
+    let offset = 0;
+    while (timestamps.length < excess + 1) {
+      const page = await table.query().limit(SCAN_PAGE_SIZE).offset(offset).toArray();
+      if (page.length === 0) break;
+      for (const r of page) timestamps.push(r.timestamp as number);
+      if (page.length < SCAN_PAGE_SIZE) break;
+      offset += SCAN_PAGE_SIZE;
+    }
+
+    if (timestamps.length === 0) return;
+
+    // Sort ascending (oldest first) and pick the timestamp at index `excess - 1`.
+    // Everything at or before this timestamp gets deleted.
+    timestamps.sort((a, b) => a - b);
+    const cutoffTs = timestamps[Math.min(excess - 1, timestamps.length - 1)];
+
+    await (table as lancedb.Table & { delete(filter: string): Promise<void> }).delete(
+      `timestamp <= ${cutoffTs}`,
+    );
+
+    this._rowCount = Math.max(0, (this._rowCount ?? excess) - excess);
+    this._rowCapEvictions += excess;
+    this.queryCache.clear();
+    logger.info({ evicted: excess, cutoffTs }, 'Evicted oldest memory entries (FIFO row cap)');
+  }
+
+  /**
+   * Return lifetime row-cap eviction count (rows removed to enforce maxRows).
+   * Resets to 0 when the process restarts.
+   */
+  getRowCapEvictions(): number {
+    return this._rowCapEvictions;
+  }
+
   /**
    * Store a memory entry
    */
@@ -411,8 +528,18 @@ export class MemoryStore {
         await table.add([memoryEntry]);
       }
 
+      // Track the row count so _enforceRowCap() can skip the full scan.
+      if (this._rowCount !== null) {
+        this._rowCount++;
+      } else {
+        // Count unknown — let _enforceRowCap() initialise it via _initRowCount().
+      }
+
       // A new memory invalidates all cached query results.
       this.queryCache.clear();
+
+      // Evict oldest entries if the table has grown past the configured cap.
+      await this._enforceRowCap();
 
       return id;
     } catch (error) {
@@ -615,14 +742,14 @@ export class MemoryStore {
   /**
    * Get stats about the memory store
    */
-  async getStats(): Promise<{ totalMemories: number; byType: Record<string, number> }> {
+  async getStats(): Promise<{ totalMemories: number; byType: Record<string, number>; maxRows: number; rowCapEvictions: number }> {
     if (!this.db) {
-      return { totalMemories: 0, byType: {} };
+      return { totalMemories: 0, byType: {}, maxRows: this.maxRows, rowCapEvictions: this._rowCapEvictions };
     }
 
     try {
       const table = await this.getTable();
-      if (!table) return { totalMemories: 0, byType: {} };
+      if (!table) return { totalMemories: 0, byType: {}, maxRows: this.maxRows, rowCapEvictions: this._rowCapEvictions };
 
       // Paginate so we don't load the entire table into RAM for a simple count.
       const byType: Record<string, number> = {};
@@ -640,10 +767,13 @@ export class MemoryStore {
         offset += SCAN_PAGE_SIZE;
       }
 
-      return { totalMemories, byType };
+      // Keep _rowCount in sync with the authoritative count we just computed.
+      this._rowCount = totalMemories;
+
+      return { totalMemories, byType, maxRows: this.maxRows, rowCapEvictions: this._rowCapEvictions };
     } catch (error) {
       logger.error({ err: error }, 'Failed to get memory stats');
-      return { totalMemories: 0, byType: {} };
+      return { totalMemories: 0, byType: {}, maxRows: this.maxRows, rowCapEvictions: this._rowCapEvictions };
     }
   }
 
@@ -687,6 +817,9 @@ export class MemoryStore {
 
       if (pruned > 0) {
         await (table as lancedb.Table & { delete(filter: string): Promise<void> }).delete(filter);
+        if (this._rowCount !== null) {
+          this._rowCount = Math.max(0, this._rowCount - pruned);
+        }
         this.queryCache.clear();
         logger.info({ pruned, cutoffMs, ttlMs }, 'Pruned expired memory entries');
       }
@@ -709,6 +842,7 @@ export class MemoryStore {
       if (tableNames.includes(this.tableName)) {
         this.invalidateTable();
         await this.db.dropTable(this.tableName);
+        this._rowCount = 0;
       }
     } catch (error) {
       logger.error({ err: error }, 'Failed to clear memories');

@@ -164,6 +164,15 @@ export interface MiaConfig {
      * Default: 256.
      */
     queryCacheMaxEntries?: number;
+    /**
+     * Maximum number of rows the LanceDB memories table may hold.
+     * When a new entry is inserted and the total row count exceeds this limit,
+     * the oldest entries (by timestamp) are evicted until the count is back
+     * at the cap (FIFO eviction).
+     * Set to 0 to disable the cap entirely.
+     * Default: 10 000.
+     */
+    maxRows?: number;
   };
 
   /**
@@ -270,6 +279,11 @@ export function validateMiaConfig(config: MiaConfig): void {
   if (config.memory?.pruneIntervalHours !== undefined) {
     if (typeof config.memory.pruneIntervalHours !== 'number' || !Number.isFinite(config.memory.pruneIntervalHours) || config.memory.pruneIntervalHours <= 0) {
       throw new Error(`[mia-config] memory.pruneIntervalHours must be a positive number, got: ${config.memory.pruneIntervalHours}`);
+    }
+  }
+  if (config.memory?.maxRows !== undefined) {
+    if (typeof config.memory.maxRows !== 'number' || !Number.isInteger(config.memory.maxRows) || config.memory.maxRows < 0) {
+      throw new Error(`[mia-config] memory.maxRows must be a non-negative integer, got: ${config.memory.maxRows}`);
     }
   }
 

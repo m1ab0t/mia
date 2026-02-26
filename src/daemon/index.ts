@@ -156,7 +156,10 @@ async function main() {
   let memoryPruneInterval: ReturnType<typeof setInterval> | null = null;
 
   try {
-    await initMemoryStore({ maxCacheEntries: miaConfig.memory?.queryCacheMaxEntries });
+    await initMemoryStore({
+      maxCacheEntries: miaConfig.memory?.queryCacheMaxEntries,
+      maxRows: miaConfig.memory?.maxRows,
+    });
     const store = getMemoryStore();
     const stats = await store?.getStats();
     log('info', `Memory: ${stats?.totalMemories ?? 0} memories loaded`);

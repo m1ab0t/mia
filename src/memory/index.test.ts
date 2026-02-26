@@ -69,6 +69,7 @@ vi.mock('fs/promises', () => ({
 
 import { MemoryStore, getMemoryStore, type MemoryStoreOptions } from './index.js';
 import * as lancedb from '@lancedb/lancedb';
+// Suppress unused import warning — lancedb is used in type assertions inside the module under test
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -721,13 +722,13 @@ describe('MemoryStore convenience helpers', () => {
 describe('MemoryStore.getStats()', () => {
   it('returns zero totals when not connected', async () => {
     const store = new MemoryStore();
-    expect(await store.getStats()).toEqual({ totalMemories: 0, byType: {} });
+    expect(await store.getStats()).toMatchObject({ totalMemories: 0, byType: {} });
   });
 
   it('returns zero totals when the table does not exist', async () => {
     const store = await makeConnectedStore();
     mockDb.tableNames.mockResolvedValue([]);
-    expect(await store.getStats()).toEqual({ totalMemories: 0, byType: {} });
+    expect(await store.getStats()).toMatchObject({ totalMemories: 0, byType: {} });
   });
 
   it('counts all rows and groups them by type', async () => {
@@ -748,7 +749,7 @@ describe('MemoryStore.getStats()', () => {
   it('returns zero totals and does not throw when the DB operation fails', async () => {
     const store = await makeConnectedStore();
     mockDb.tableNames.mockRejectedValueOnce(new Error('oops'));
-    expect(await store.getStats()).toEqual({ totalMemories: 0, byType: {} });
+    expect(await store.getStats()).toMatchObject({ totalMemories: 0, byType: {} });
   });
 });
 
@@ -1172,5 +1173,143 @@ describe('cleanupOrphanedStagingTables() — via connect()', () => {
 
     expect(mockDb.dropTable).toHaveBeenCalledWith('memories_migrating');
     expect(mockDb.dropTable).toHaveBeenCalledWith('other_migrating');
+  });
+});
+
+// ── FIFO row-cap eviction ─────────────────────────────────────────────────
+
+describe('MemoryStore — FIFO row-cap eviction', () => {
+  let mockDelete: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    // Global beforeEach has already run (clearAllMocks + restore defaults).
+    // Add the delete method that _enforceRowCap casts onto the table handle.
+    mockDelete = vi.fn().mockResolvedValue(undefined);
+    (mockTable as Record<string, unknown>).delete = mockDelete;
+
+    // Use a pre-existing table so getTable() succeeds via openTable().
+    mockDb.tableNames.mockResolvedValue(['memories']);
+  });
+
+  it('does not evict when maxRows is 0 (disabled)', async () => {
+    setupQuery(Array.from({ length: 50 }, (_, i) => makeRow({ timestamp: (i + 1) * 1000 })));
+    const store = await makeCappedStore({ maxRows: 0 });
+    await store.store({ content: 'test', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('does not evict when row count is within the cap', async () => {
+    setupQuery([makeRow({ timestamp: 1000 }), makeRow({ timestamp: 2000 })]);
+    const store = await makeCappedStore({ maxRows: 5 });
+    await store.store({ content: 'test', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('does not evict when row count exactly equals maxRows', async () => {
+    setupQuery(Array.from({ length: 3 }, (_, i) => makeRow({ timestamp: (i + 1) * 1000 })));
+    const store = await makeCappedStore({ maxRows: 3 });
+    await store.store({ content: 'test', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('evicts the single oldest row when count is one over the cap', async () => {
+    // Query reports 3 rows; maxRows=2 → excess=1 → delete rows with ts ≤ 1000
+    setupQuery([
+      makeRow({ timestamp: 3000 }),
+      makeRow({ timestamp: 1000 }),
+      makeRow({ timestamp: 2000 }),
+    ]);
+    const store = await makeCappedStore({ maxRows: 2 });
+    const id = await store.store({ content: 'new entry', type: 'fact' });
+    expect(id).not.toBeNull();
+    expect(mockDelete).toHaveBeenCalledWith('timestamp <= 1000');
+  });
+
+  it('evicts multiple oldest rows when excess > 1', async () => {
+    // 5 rows, maxRows=2 → excess=3 → 3rd-oldest timestamp is cutoff (ts=3000)
+    setupQuery([
+      makeRow({ timestamp: 5000 }),
+      makeRow({ timestamp: 1000 }),
+      makeRow({ timestamp: 2000 }),
+      makeRow({ timestamp: 4000 }),
+      makeRow({ timestamp: 3000 }),
+    ]);
+    const store = await makeCappedStore({ maxRows: 2 });
+    await store.store({ content: 'new entry', type: 'fact' });
+    expect(mockDelete).toHaveBeenCalledWith('timestamp <= 3000');
+  });
+
+  it('counts evictions via getRowCapEvictions()', async () => {
+    setupQuery([
+      makeRow({ timestamp: 1000 }),
+      makeRow({ timestamp: 2000 }),
+      makeRow({ timestamp: 3000 }),
+    ]);
+    const store = await makeCappedStore({ maxRows: 2 });
+    expect(store.getRowCapEvictions()).toBe(0);
+    await store.store({ content: 'entry', type: 'fact' });
+    // excess = 3 - 2 = 1 → _rowCapEvictions += 1
+    expect(store.getRowCapEvictions()).toBe(1);
+  });
+
+  it('tracks _rowCount without re-scanning after first initialisation', async () => {
+    // First store: table has 2 rows, maxRows=3 → no eviction, _rowCount set to 2
+    setupQuery([makeRow({ timestamp: 1000 }), makeRow({ timestamp: 2000 })]);
+    const store = await makeCappedStore({ maxRows: 3 });
+    await store.store({ content: 'entry1', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
+
+    // Second store: _rowCount incremented to 3, ≤ maxRows → no eviction
+    // (No setupQuery call here — query would not be invoked since count is cached)
+    await store.store({ content: 'entry2', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
+
+    // Third store: _rowCount incremented to 4, excess=1 → eviction
+    // Provide timestamp data for _enforceRowCap's scan
+    setupQuery([
+      makeRow({ timestamp: 1000 }),
+      makeRow({ timestamp: 2000 }),
+      makeRow({ timestamp: 3000 }),
+      makeRow({ timestamp: 4000 }),
+    ]);
+    await store.store({ content: 'entry3', type: 'fact' });
+    expect(mockDelete).toHaveBeenCalledWith('timestamp <= 1000');
+  });
+
+  it('getStats() surfaces maxRows and rowCapEvictions', async () => {
+    setupQuery([makeRow({ type: 'fact' }), makeRow({ type: 'context' })]);
+    const store = await makeCappedStore({ maxRows: 42 });
+    const stats = await store.getStats();
+    expect(stats.maxRows).toBe(42);
+    expect(stats.rowCapEvictions).toBe(0);
+  });
+
+  it('getStats() updates _rowCount so subsequent stores use the accurate count', async () => {
+    // Simulate a table with 1 row via getStats(), then store without triggering eviction
+    setupQuery([makeRow({ timestamp: 1000 })]);
+    const store = await makeCappedStore({ maxRows: 3 });
+    const stats = await store.getStats();
+    expect(stats.totalMemories).toBe(1);
+
+    // _rowCount is now 1 (set by getStats). store() increments to 2 < maxRows=3 → no evict
+    await store.store({ content: 'entry', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('clear() resets _rowCount so subsequent inserts start the count from zero', async () => {
+    // Eviction fires on first store (3 rows, maxRows=2)
+    setupQuery(Array.from({ length: 3 }, (_, i) => makeRow({ timestamp: (i + 1) * 1000 })));
+    const store = await makeCappedStore({ maxRows: 2 });
+    await store.store({ content: 'e1', type: 'fact' });
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+
+    // Clear resets _rowCount to 0
+    await store.clear();
+
+    // Next store on an empty DB creates the table fresh (_rowCount 0 → 1 < maxRows)
+    mockDelete.mockClear();
+    mockDb.tableNames.mockResolvedValue([]);
+    await store.store({ content: 'e2', type: 'fact' });
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 });
