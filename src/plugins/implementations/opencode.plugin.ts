@@ -134,7 +134,9 @@ interface SdkToolPart {
 interface SdkEventPartUpdated {
   type: 'message.part.updated';
   properties: {
-    part: Partial<SdkToolPart> & { type: string };
+    // `part` may be a text part or a tool part; keep the shape open so we can
+    // check `part.type` at runtime without TypeScript narrowing it to 'tool'.
+    part: { type: string; sessionID?: string } & Partial<Omit<SdkToolPart, 'type' | 'sessionID'>>;
     delta?: string;
   };
 }
@@ -779,10 +781,30 @@ export class OpenCodePlugin implements CodingPlugin {
 
         if (payload.type !== 'message.part.updated') continue;
 
-        const part = (payload as SdkEventPartUpdated).properties?.part;
-        if (!part || part.type !== 'tool') continue;
+        const props = (payload as SdkEventPartUpdated).properties;
+        const part  = props?.part;
+        if (!part) continue;
+
         // Filter to events belonging to the current opencode session
         if (part.sessionID && part.sessionID !== sessionId) continue;
+
+        // ── Text streaming ──────────────────────────────────────────────────
+        // `message.part.updated` fires for text parts too.  The `delta` field
+        // on `properties` carries the newly-appended text so we can forward
+        // it to mobile immediately instead of waiting for session.prompt() to
+        // return the full response.
+        if (part.type === 'text') {
+          const delta = props.delta;
+          if (delta) {
+            // Mark that text was streamed so _processResponseParts won't
+            // re-emit onToken for the same content.
+            emittedCallIds.add('text_streamed');
+            callbacks.onToken(delta, taskId);
+          }
+          continue;
+        }
+
+        if (part.type !== 'tool') continue;
 
         const toolName = part.tool || 'unknown';
         const state   = part.state;
@@ -841,12 +863,18 @@ export class OpenCodePlugin implements CodingPlugin {
   ): string {
     const textParts: string[] = [];
 
+    const alreadyStreamed = emittedCallIds?.has('text_streamed') ?? false;
+
     for (const part of parts) {
       if (part.type === 'text') {
         const textPart = part as SdkTextPart;
         if (textPart.text) {
           textParts.push(textPart.text);
-          callbacks.onToken(textPart.text, taskId);
+          // Skip re-emitting tokens if we already forwarded them in real-time
+          // via the SSE delta stream in _subscribeToToolEvents.
+          if (!alreadyStreamed) {
+            callbacks.onToken(textPart.text, taskId);
+          }
         }
       } else if (part.type === 'tool') {
         const toolPart = part as SdkToolPart;
