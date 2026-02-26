@@ -183,8 +183,8 @@ describe('BaseSpawnPlugin', () => {
       await p.initialize({ name: 'test', enabled: true, maxConcurrency: 2 });
       // Concurrency should respect stored config (maxConcurrency=2, so 3rd should error)
       const tasks = (p as unknown as { tasks: Map<string, unknown> }).tasks;
-      tasks.set('t1', { taskId: 't1', status: 'running', startedAt: Date.now() });
-      tasks.set('t2', { taskId: 't2', status: 'running', startedAt: Date.now() });
+      tasks.set('t1', { taskId: 't1', status: 'running', startedAt: Date.now(), lastActivityAt: Date.now() });
+      tasks.set('t2', { taskId: 't2', status: 'running', startedAt: Date.now(), lastActivityAt: Date.now() });
       const cb = makeCallbacks();
       const result = await p.dispatch('x', mockContext, baseOptions, cb);
       expect(result.success).toBe(false);
@@ -530,9 +530,9 @@ describe('BaseSpawnPlugin', () => {
   describe('concurrency', () => {
     it('returns error immediately when maxConcurrency is reached', async () => {
       // Fill up to maxConcurrency (3) with fake running tasks
-      plugin._tasks.set('t1', { taskId: 't1', status: 'running', startedAt: Date.now() });
-      plugin._tasks.set('t2', { taskId: 't2', status: 'running', startedAt: Date.now() });
-      plugin._tasks.set('t3', { taskId: 't3', status: 'running', startedAt: Date.now() });
+      plugin._tasks.set('t1', { taskId: 't1', status: 'running', startedAt: Date.now(), lastActivityAt: Date.now() });
+      plugin._tasks.set('t2', { taskId: 't2', status: 'running', startedAt: Date.now(), lastActivityAt: Date.now() });
+      plugin._tasks.set('t3', { taskId: 't3', status: 'running', startedAt: Date.now(), lastActivityAt: Date.now() });
 
       const cb = makeCallbacks();
       const result = await plugin.dispatch('overflow', mockContext, baseOptions, cb);
@@ -545,8 +545,8 @@ describe('BaseSpawnPlugin', () => {
 
     it('getRunningTaskCount reflects live state', async () => {
       expect(plugin.getRunningTaskCount()).toBe(0);
-      plugin._tasks.set('r1', { taskId: 'r1', status: 'running', startedAt: Date.now() });
-      plugin._tasks.set('c1', { taskId: 'c1', status: 'completed', startedAt: Date.now() });
+      plugin._tasks.set('r1', { taskId: 'r1', status: 'running', startedAt: Date.now(), lastActivityAt: Date.now() });
+      plugin._tasks.set('c1', { taskId: 'c1', status: 'completed', startedAt: Date.now(), lastActivityAt: Date.now() });
       expect(plugin.getRunningTaskCount()).toBe(1);
     });
   });
@@ -804,12 +804,14 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'old-done',
         status: 'completed',
         startedAt: old,
+        lastActivityAt: old,
         completedAt: old + 1000,
       });
       plugin._tasks.set('old-err', {
         taskId: 'old-err',
         status: 'error',
         startedAt: old,
+        lastActivityAt: old,
         completedAt: old + 500,
       });
 
@@ -824,6 +826,7 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'running-old',
         status: 'running',
         startedAt: Date.now() - 2 * 60 * 60 * 1_000,
+        lastActivityAt: Date.now() - 2 * 60 * 60 * 1_000,
       });
 
       const pruned = plugin.cleanup(60 * 1_000);
@@ -840,6 +843,7 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'recent',
         status: 'completed',
         startedAt: Date.now() - 1_000,
+        lastActivityAt: Date.now() - 1_000,
         completedAt: Date.now() - 500,
       });
 
@@ -856,6 +860,7 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'old-task',
         status: 'completed',
         startedAt: old,
+        lastActivityAt: old,
         completedAt: old + 1_000,
         conversationId: 'conv-stale',
       });
@@ -877,6 +882,7 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'old-task',
         status: 'completed',
         startedAt: old,
+        lastActivityAt: old,
         completedAt: old + 1_000,
         conversationId: 'conv-active',
       });
@@ -885,6 +891,7 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'recent-task',
         status: 'completed',
         startedAt: recent,
+        lastActivityAt: recent,
         completedAt: recent + 500,
         conversationId: 'conv-active',
       });
@@ -906,6 +913,7 @@ describe('BaseSpawnPlugin', () => {
         taskId: 'old-task',
         status: 'completed',
         startedAt: old,
+        lastActivityAt: old,
         completedAt: old + 1_000,
         conversationId: 'conv-inflight',
       });
@@ -927,6 +935,7 @@ describe('BaseSpawnPlugin', () => {
           taskId: `task-${i}`,
           status: 'completed',
           startedAt: old,
+          lastActivityAt: old,
           completedAt: old + 1_000,
           conversationId: `conv-${i}`,
         });

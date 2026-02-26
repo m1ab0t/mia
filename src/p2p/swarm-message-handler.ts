@@ -730,7 +730,7 @@ async function handleConnMessage(
       'thinking', 'token_usage', 'route_info', 'bash_stream',
       'history', 'conversations', 'plugins', 'plugin_switched',
       'scheduler_tasks', 'error', 'server_restarting', 'search_results',
-      'suggestions',
+      'suggestions', 'task_status',
     ]);
     if (OUTBOUND_TYPES.has(parsed.type)) {
       logger.debug(`[P2P] Dropped echoed outbound message type '${parsed.type}' from peer`);

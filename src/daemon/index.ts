@@ -472,6 +472,12 @@ async function main() {
     () => pluginDispatcher.getPluginsInfo(),
     log,
     performRestart,
+    () => pluginDispatcher.abortAll(),
+    () => {
+      const plugin = pluginDispatcher.getActivePlugin();
+      const count = plugin.getRunningTaskCount();
+      return { running: count > 0, count };
+    },
   );
 
   if (!p2pResult.success) {

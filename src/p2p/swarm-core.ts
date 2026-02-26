@@ -316,6 +316,11 @@ export function broadcastSuggestions(suggestions: SuggestionInfo[], greetings: s
   sendToAll({ type: 'suggestions', suggestions, greetings });
 }
 
+/** Broadcast current task status to all peers (e.g. on reconnect). */
+export function broadcastTaskStatus(running: boolean, conversationId?: string): void {
+  sendToAll({ type: 'task_status', running, conversationId: conversationId ?? currentConversationId });
+}
+
 /** Broadcast plugin_switched to all peers (e.g. after a CLI-triggered switch). */
 export function broadcastPluginSwitched(activePlugin: string): void {
   sendToAll({ type: 'plugin_switched', activePlugin });

@@ -139,6 +139,7 @@ export interface PluginConfig {
   model?: string;               // Default model for this plugin
   maxConcurrency?: number;
   timeoutMs?: number;
+  stallTimeoutMs?: number;      // Inactivity timeout — kill child if no NDJSON output for this long (default 120s)
   systemPrompt?: string;        // Plugin-level system prompt override
   extraArgs?: string[];         // Additional CLI flags
   env?: Record<string, string>; // Additional environment variables

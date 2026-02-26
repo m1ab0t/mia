@@ -63,6 +63,7 @@ import {
   broadcastPluginSwitched,
   broadcastConfigReloaded,
   broadcastSuggestions,
+  broadcastTaskStatus,
   type ImageAttachment,
   type ScheduledTaskInfo,
   type SuggestionInfo,
@@ -185,6 +186,10 @@ async function handleDaemonCommand(cmd: DaemonToAgent): Promise<void> {
 
     case 'broadcast_config_reloaded':
       broadcastConfigReloaded(cmd.changes);
+      break;
+
+    case 'task_status':
+      broadcastTaskStatus(cmd.running, cmd.conversationId);
       break;
 
     case 'suggestions_list': {

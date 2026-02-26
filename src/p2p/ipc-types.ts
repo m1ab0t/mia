@@ -162,6 +162,7 @@ export type DaemonToAgent =
   | { type: 'daily_greeting_response'; requestId: string; message: string }
   | { type: 'get_recent_messages'; requestId: string; conversationId: string; limit: number }
   | { type: 'shutdown' }
+  | { type: 'task_status'; running: boolean; conversationId?: string }
   /**
    * Emitted when a plugin dispatch fails with a structured `PluginError`.
    * Mobile clients should use `code` for programmatic handling (e.g. showing

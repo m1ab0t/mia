@@ -13,7 +13,58 @@
 import type { Writable } from 'stream';
 import type { DaemonToAgent } from './ipc-types';
 
+// ── IPC write queue with backpressure ─────────────────────────────────────
+
+const IPC_QUEUE_MAX_DEPTH = 1024;
+
+class IpcWriteQueue {
+  private entries: string[] = [];
+  private draining = false;
+  private stream: Writable;
+
+  constructor(stream: Writable) {
+    this.stream = stream;
+  }
+
+  enqueue(data: string): void {
+    if (this.entries.length >= IPC_QUEUE_MAX_DEPTH) {
+      const dropCount = Math.max(1, Math.floor(IPC_QUEUE_MAX_DEPTH / 10));
+      this.entries.splice(0, dropCount);
+    }
+    this.entries.push(data);
+    if (!this.draining) {
+      this._drain();
+    }
+  }
+
+  private _drain(): void {
+    this.draining = true;
+    while (this.entries.length > 0) {
+      const item = this.entries.shift()!;
+      let ok: boolean;
+      try {
+        ok = this.stream.write(item);
+      } catch {
+        this.entries.length = 0;
+        this.draining = false;
+        return;
+      }
+      if (!ok) {
+        this.stream.once('drain', () => this._drain());
+        return;
+      }
+    }
+    this.draining = false;
+  }
+
+  destroy(): void {
+    this.entries.length = 0;
+    this.draining = false;
+  }
+}
+
 let agentStdin: Writable | null = null;
+let ipcQueue: IpcWriteQueue | null = null;
 let currentConversationId: string | null = null;
 let resumedConversationId: string | null = null;
 let peerCount = 0;
@@ -23,9 +74,14 @@ let p2pKey: string | null = null;
 
 export function configureP2PSender(stdin: Writable): void {
   agentStdin = stdin;
+  ipcQueue = new IpcWriteQueue(stdin);
 }
 
 export function clearP2PSender(): void {
+  if (ipcQueue) {
+    ipcQueue.destroy();
+    ipcQueue = null;
+  }
   agentStdin = null;
   p2pKey = null;
 }
@@ -69,9 +125,9 @@ export function getP2PStatus(): { connected: boolean; key: string | null; peerCo
 // ── Core send ─────────────────────────────────────────────────────────────
 
 export function sendDaemonToAgent(msg: DaemonToAgent): void {
-  if (!agentStdin) return;
+  if (!ipcQueue) return;
   try {
-    agentStdin.write(JSON.stringify(msg) + '\n');
+    ipcQueue.enqueue(JSON.stringify(msg) + '\n');
   } catch {
     // Agent stdin closed (e.g. crashed) — ignore
   }

@@ -45,6 +45,12 @@ import { PluginError, PluginErrorCode } from './types.js';
 /** Grace period before SIGKILL after SIGTERM on abort. */
 const ABORT_FORCE_KILL_DELAY_MS = 5_000;
 
+/** Default inactivity timeout — kill child if no NDJSON output for this long. */
+const DEFAULT_STALL_TIMEOUT_MS = 120_000;
+
+/** How often the stall-detection timer fires. */
+const STALL_CHECK_INTERVAL_MS = 15_000;
+
 /**
  * Maximum bytes allowed in the partial-line stdout buffer between newlines.
  * If a child process emits a line larger than this (e.g. a binary blob or a
@@ -63,6 +69,7 @@ export interface BaseTaskInfo {
   taskId: string;
   status: 'running' | 'completed' | 'error' | 'killed';
   startedAt: number;
+  lastActivityAt: number;
   completedAt?: number;
   /** Final text output once the task completes. */
   result?: string;
@@ -317,6 +324,7 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
       taskId,
       status: 'error',
       startedAt: now,
+      lastActivityAt: now,
       completedAt: now,
       error: errorMsg,
     });
@@ -356,7 +364,7 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
   private _registerTask(conversationId: string): { taskId: string } {
     const taskId = randomUUID();
     const startedAt = Date.now();
-    this.tasks.set(taskId, { taskId, status: 'running', startedAt, conversationId });
+    this.tasks.set(taskId, { taskId, status: 'running', startedAt, lastActivityAt: startedAt, conversationId });
     this.activeConversations.set(conversationId, taskId);
     return { taskId };
   }
@@ -403,10 +411,11 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     return new Promise<PluginDispatchResult>((resolve) => {
       const bufRef: BufferRef = { value: '' };
       const timer = this._setupTimeout(taskId, timeoutMs, callbacks, resolve);
+      const stallTimer = this._setupStallTimer(taskId, callbacks, resolve);
       this._setupStdoutParser(child, taskId, callbacks, bufRef);
       this._setupStderrSink(child, taskId);
-      this._setupCloseHandler(child, taskId, callbacks, resolve, timer, bufRef);
-      this._setupErrorHandler(child, taskId, callbacks, resolve, timer);
+      this._setupCloseHandler(child, taskId, callbacks, resolve, timer, stallTimer, bufRef);
+      this._setupErrorHandler(child, taskId, callbacks, resolve, timer, stallTimer);
     });
   }
 
@@ -480,7 +489,10 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
-          this._handleMessage(taskId, JSON.parse(line) as Record<string, unknown>, callbacks);
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          const task = this.tasks.get(taskId);
+          if (task) task.lastActivityAt = Date.now();
+          this._handleMessage(taskId, parsed, callbacks);
         } catch {
           // Non-JSON output — ignore
         }
@@ -516,10 +528,12 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     callbacks: CodingPluginCallbacks,
     resolve: (result: PluginDispatchResult) => void,
     timer: ReturnType<typeof setTimeout>,
+    stallTimer: ReturnType<typeof setInterval>,
     bufRef: BufferRef
   ): void {
     child.on('close', (code) => {
       clearTimeout(timer);
+      clearInterval(stallTimer);
       this.processes.delete(taskId);
 
       // Flush any remaining buffered line
@@ -590,10 +604,12 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     taskId: string,
     callbacks: CodingPluginCallbacks,
     resolve: (result: PluginDispatchResult) => void,
-    timer: ReturnType<typeof setTimeout>
+    timer: ReturnType<typeof setTimeout>,
+    stallTimer: ReturnType<typeof setInterval>
   ): void {
     child.on('error', (err) => {
       clearTimeout(timer);
+      clearInterval(stallTimer);
       this.processes.delete(taskId);
 
       const task = this.tasks.get(taskId);
@@ -613,6 +629,36 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
 
       this._onTaskFinished(taskId);
     });
+  }
+
+  /**
+   * Arms a periodic stall-detection timer.  If the child process stops
+   * emitting NDJSON messages for longer than the configured stall timeout,
+   * the task is marked as errored and the child is killed.
+   */
+  private _setupStallTimer(
+    taskId: string,
+    callbacks: CodingPluginCallbacks,
+    resolve: (result: PluginDispatchResult) => void
+  ): ReturnType<typeof setInterval> {
+    const stallTimeoutMs = this.config?.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+
+    return setInterval(() => {
+      const task = this.tasks.get(taskId);
+      if (!task || task.status !== 'running') return;
+
+      const elapsed = Date.now() - task.lastActivityAt;
+      if (elapsed > stallTimeoutMs) {
+        const stallMsg = `Stalled — no activity for ${Math.round(elapsed / 1000)}s`;
+        task.status = 'error';
+        task.completedAt = Date.now();
+        task.durationMs = task.completedAt - task.startedAt;
+        task.error = stallMsg;
+        this._emitErrorCallback(task, callbacks, new PluginError(stallMsg, PluginErrorCode.TIMEOUT, this.name));
+        resolve({ taskId, success: false, output: stallMsg, durationMs: task.durationMs });
+        this._kill(taskId);
+      }
+    }, STALL_CHECK_INTERVAL_MS);
   }
 
   // ── Callback helpers ─────────────────────────────────────────────────────────

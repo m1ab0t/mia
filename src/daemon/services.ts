@@ -25,6 +25,7 @@ import {
   setResumedConversationId,
   setPeerCount,
   setP2PKey,
+  getCurrentConversationId,
   handleRecentMessagesResponse,
 } from '../p2p/sender';
 import { getScheduler } from '../scheduler/index';
@@ -62,6 +63,8 @@ export async function spawnP2PSubAgent(
   getPluginsInfo: () => Promise<{ plugins: PluginInfo[]; activePlugin: string }>,
   log: (level: LogLevel, msg: string) => void,
   onRestart?: () => void,
+  onAbortAll?: () => Promise<void>,
+  getTaskStatus?: () => { running: boolean; count: number },
 ): Promise<P2PSubAgentResult> {
   return new Promise((resolve) => {
     // In production the daemon runs from dist/, so p2p-agent.js is a sibling.
@@ -121,6 +124,8 @@ export async function spawnP2PSubAgent(
             getPluginsInfo,
             log,
             onRestart: onRestart || (() => {}),
+            onAbortAll: onAbortAll || (() => Promise.resolve()),
+            getTaskStatus: getTaskStatus || (() => ({ running: false, count: 0 })),
             onPeerConnected: () => peerConnectedCallback?.(),
             resolveReady: (result) => {
               if (!resolved) {
@@ -163,6 +168,8 @@ interface HandlerCtx {
   getPluginsInfo: () => Promise<{ plugins: PluginInfo[]; activePlugin: string }>;
   log: (level: LogLevel, msg: string) => void;
   onRestart: () => void;
+  onAbortAll: () => Promise<void>;
+  getTaskStatus: () => { running: boolean; count: number };
   onPeerConnected: () => void;
   resolveReady: (result: Omit<P2PSubAgentResult, 'onPeerConnected'>) => void;
 }
@@ -212,7 +219,7 @@ function isDispatchRateLimited(log: HandlerCtx['log']): boolean {
 }
 
 function handleAgentMessage(msg: AgentToDaemon, ctx: HandlerCtx): void {
-  const { routeMessageFn, queue, onPluginSwitch, getPluginsInfo, log, onRestart, resolveReady, onPeerConnected } = ctx;
+  const { routeMessageFn, onPluginSwitch, getPluginsInfo, log, onRestart, resolveReady, onPeerConnected, getTaskStatus } = ctx;
 
   switch (msg.type) {
     case 'ready': {
@@ -238,11 +245,16 @@ function handleAgentMessage(msg: AgentToDaemon, ctx: HandlerCtx): void {
       break;
     }
 
-    case 'peer_connected':
+    case 'peer_connected': {
       setPeerCount(msg.peerCount);
       log('info', `P2P peer connected (total: ${msg.peerCount})`);
       onPeerConnected();
+      const status = getTaskStatus();
+      if (status.running) {
+        sendDaemonToAgent({ type: 'task_status', running: true, conversationId: getCurrentConversationId() ?? undefined });
+      }
       break;
+    }
 
     case 'peer_disconnected':
       setPeerCount(msg.peerCount);
@@ -268,18 +280,14 @@ function handleAgentMessage(msg: AgentToDaemon, ctx: HandlerCtx): void {
 
     case 'control_new_conversation':
       setCurrentConversationId(null);
-      log('info', 'New conversation — clearing queue');
-      queue.lock();
-      queue.abortAndDrain();
-      queue.unlock();
+      log('info', 'New conversation — aborting running plugins');
+      ctx.onAbortAll().catch((err) => log('warn', `Abort failed: ${getErrorMessage(err)}`));
       break;
 
     case 'control_load_conversation':
       setCurrentConversationId(msg.conversationId);
-      log('info', `Loading conversation ${msg.conversationId} — clearing queue`);
-      queue.lock();
-      queue.abortAndDrain();
-      queue.unlock();
+      log('info', `Loading conversation ${msg.conversationId} — aborting running plugins`);
+      ctx.onAbortAll().catch((err) => log('warn', `Abort failed: ${getErrorMessage(err)}`));
       break;
 
     case 'control_plugin_switch': {

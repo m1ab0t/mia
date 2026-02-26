@@ -146,6 +146,8 @@ function makeHandlers() {
     })),
     log: vi.fn() as Mock,
     onRestart: vi.fn(),
+    onAbortAll: vi.fn(async () => {}),
+    getTaskStatus: vi.fn(() => ({ running: false, count: 0 })),
   };
 }
 
@@ -602,12 +604,13 @@ describe("handleAgentMessage — 'user_message'", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("handleAgentMessage — 'control_new_conversation'", () => {
-  it('locks then abortAndDrains then unlocks the queue', async () => {
+  it('calls onAbortAll to kill running plugins', async () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as never);
     const h = makeHandlers();
     const p = spawnP2PSubAgent(
       h.routeMessageFn, h.queue, h.onPluginSwitch, h.getPluginsInfo, h.log,
+      undefined, h.onAbortAll, h.getTaskStatus,
     );
     pushMessage(child, { type: 'ready', key: 'k' });
     await p;
@@ -615,12 +618,7 @@ describe("handleAgentMessage — 'control_new_conversation'", () => {
     pushMessage(child, { type: 'control_new_conversation' });
     await new Promise(r => setImmediate(r));
 
-    const lockOrder = (h.queue.lock as Mock).mock.invocationCallOrder[0];
-    const drainOrder = (h.queue.abortAndDrain as Mock).mock.invocationCallOrder[0];
-    const unlockOrder = (h.queue.unlock as Mock).mock.invocationCallOrder[0];
-
-    expect(lockOrder).toBeLessThan(drainOrder);
-    expect(drainOrder).toBeLessThan(unlockOrder);
+    expect(h.onAbortAll).toHaveBeenCalledOnce();
   });
 
   it('sets currentConversationId to null', async () => {
@@ -677,12 +675,13 @@ describe("handleAgentMessage — 'control_load_conversation'", () => {
     expect(vi.mocked(setCurrentConversationId)).toHaveBeenCalledWith('loaded-99');
   });
 
-  it('aborts the queue', async () => {
+  it('calls onAbortAll to kill running plugins', async () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as never);
     const h = makeHandlers();
     const p = spawnP2PSubAgent(
       h.routeMessageFn, h.queue, h.onPluginSwitch, h.getPluginsInfo, h.log,
+      undefined, h.onAbortAll, h.getTaskStatus,
     );
     pushMessage(child, { type: 'ready', key: 'k' });
     await p;
@@ -690,7 +689,7 @@ describe("handleAgentMessage — 'control_load_conversation'", () => {
     pushMessage(child, { type: 'control_load_conversation', conversationId: 'loaded-99' });
     await new Promise(r => setImmediate(r));
 
-    expect(h.queue.abortAndDrain).toHaveBeenCalledOnce();
+    expect(h.onAbortAll).toHaveBeenCalledOnce();
   });
 
   it('includes conversationId in the log message', async () => {
