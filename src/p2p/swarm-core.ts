@@ -198,15 +198,15 @@ function createContext(): MessageHandlerContext {
 async function ensureMessageStore(): Promise<boolean> {
   if (messageStoreReady) return true;
   try {
-    console.log('[P2P] Attempting lazy message store initialization...');
+    logger.debug('[P2P] Attempting lazy message store initialization...');
     await closeMessageStore();
     await initMessageStore();
     messageStoreReady = true;
-    console.log('[P2P] Lazy message store initialization succeeded');
+    logger.debug('[P2P] Lazy message store initialization succeeded');
     await flushWriteBuffer();
     return true;
   } catch (err) {
-    console.error(`[P2P] Lazy message store init failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Lazy message store init failed');
     return false;
   }
 }
@@ -215,10 +215,10 @@ async function flushWriteBuffer(): Promise<void> {
   if (writeBuffer.length === 0) return;
   const pending = writeBuffer;
   writeBuffer = [];
-  console.log(`[P2P] Flushing ${pending.length} buffered write(s) to message store`);
+  logger.debug(`[P2P] Flushing ${pending.length} buffered write(s) to message store`);
   for (const entry of pending) {
     await putMessage(entry).catch(err =>
-      console.error(`[P2P] Buffered persist failed: ${getErrorMessage(err)}`),
+      logger.error({ err }, '[P2P] Buffered persist failed'),
     );
   }
 }
@@ -230,11 +230,11 @@ function persistEntry(entry: Omit<StoredMessage, 'id'>): void {
     if (writeBuffer.length < WRITE_BUFFER_MAX) {
       writeBuffer.push(entry);
     } else {
-      console.warn('[P2P] Write buffer full; dropping entry for conversation', entry.conversationId);
+      logger.warn({ conversationId: entry.conversationId }, '[P2P] Write buffer full; dropping entry for conversation');
     }
     return;
   }
-  putMessage(entry).catch(err => console.error(`[P2P] Persist failed: ${getErrorMessage(err)}`));
+  putMessage(entry).catch(err => logger.error({ err }, '[P2P] Persist failed'));
 }
 
 // ── Callback registrations ────────────────────────────────────────────
@@ -309,7 +309,7 @@ export function getP2PStatus(): P2PStatus {
 
 /** Broadcast updated suggestions (and optional greeting batch) to every connected mobile peer. */
 export function broadcastSuggestions(suggestions: SuggestionInfo[], greetings: string[] = []): void {
-  console.log(`[P2P] Broadcasting ${suggestions.length} suggestions + ${greetings.length} greeting(s) to ${connections.size} peer(s)`);
+  logger.debug(`[P2P] Broadcasting ${suggestions.length} suggestions + ${greetings.length} greeting(s) to ${connections.size} peer(s)`);
   // Generation is complete — clear the generating flag so newly connecting
   // peers don't receive a stale suggestions_generating signal.
   suggestionsGenerating = false;
@@ -369,7 +369,7 @@ function autoNameConversation(targetConvId?: string): void {
       await sendConversationListTo(conn, ctx);
     }
   })().catch((err) => {
-    console.error(`[P2P] Auto-name failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Auto-name failed');
   });
 }
 
@@ -394,7 +394,7 @@ export async function sendP2PToolCall(
     filePath?: string;
   },
 ): Promise<void> {
-  console.log(`[P2P] Sending tool_call: ${toolName} to ${connections.size} connections`);
+  logger.debug(`[P2P] Sending tool_call: ${toolName} to ${connections.size} connections`);
   const toolCallId = metadata?.toolCallId || `${toolName}_${Date.now()}`;
   const now = Date.now();
   const convId = conversationId ?? currentConversationId;
@@ -650,13 +650,13 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
               currentConversationId = candidate.id;
               resumedConversationId = candidate.id;
               resumed = true;
-              console.log(`[P2P] Resumed conversation: ${candidate.id} ("${candidate.title}")`);
+              logger.debug(`[P2P] Resumed conversation: ${candidate.id} ("${candidate.title}")`);
             }
           }
         }
       } catch (err: unknown) {
         const errMsg = getErrorMessage(err);
-        console.error(`[P2P] Resume check failed, creating new: ${errMsg}`);
+        logger.error({ err, errMsg }, '[P2P] Resume check failed, creating new');
         if (errMsg.toLowerCase().includes('session is closed') || errMsg.includes('not initialized')) {
           try {
             await closeMessageStore();
@@ -664,7 +664,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
             messageStoreReady = true;
           } catch (reinitErr) {
             messageStoreReady = false;
-            console.error(`[P2P] Message store reinit failed: ${getErrorMessage(reinitErr)}`);
+            logger.error({ err: reinitErr }, '[P2P] Message store reinit failed');
           }
         }
       }
@@ -673,14 +673,14 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         if (messageStoreReady) {
           const conv = await createConversation('New conversation');
           currentConversationId = conv.id;
-          console.log('[P2P] Message store initialized, conversation:', conv.id);
+          logger.debug({ conversationId: conv.id }, '[P2P] Message store initialized');
         } else {
-          console.log('[P2P] Message store not available, will retry on first message');
+          logger.debug('[P2P] Message store not available, will retry on first message');
         }
       }
     } catch (err: unknown) {
       messageStoreReady = false;
-      console.error(`[P2P] Message store init failed: ${getErrorMessage(err)}`);
+      logger.error({ err }, '[P2P] Message store init failed');
     }
 
     swarm = new Hyperswarm();
@@ -694,7 +694,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       // stale connection, never nuke connections from other peers.
       if (remoteKey && connections.has(remoteKey)) {
         const old = connections.get(remoteKey)!;
-        console.log(`[P2P] Replacing stale connection from ${shortKey}`);
+        logger.debug(`[P2P] Replacing stale connection from ${shortKey}`);
         removePeerQueue(old);
         try { old.destroy(); } catch (err) {
           logger.debug({ err }, '[P2P] Failed to destroy stale connection');
@@ -706,7 +706,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       connections.set(connKey, conn);
       registerPeerQueue(connKey, conn);
       if (!remoteKey) enforceAnonCap();
-      console.log(`[P2P] Peer connected (${shortKey})! Total peers: ${connections.size}`);
+      logger.debug(`[P2P] Peer connected (${shortKey})! Total peers: ${connections.size}`);
       peerStatusCallback?.('connected', connections.size);
 
       // Exponential backoff: if this peer recently disconnected, delay the
@@ -730,7 +730,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         connections.delete(connKey);
         removePeerQueue(conn);
         recordDisconnect(connKey);
-        console.log(`[P2P] Peer disconnected (${shortKey}). Remaining: ${connections.size}`);
+        logger.debug(`[P2P] Peer disconnected (${shortKey}). Remaining: ${connections.size}`);
         peerStatusCallback?.('disconnected', connections.size);
       });
       conn.on('error', (err: Error) => {
@@ -739,7 +739,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         connections.delete(connKey);
         removePeerQueue(conn);
         recordDisconnect(connKey);
-        console.log(`[P2P] Peer error (${shortKey}): ${getErrorMessage(err)}. Remaining: ${connections.size}`);
+        logger.warn({ err, key: shortKey, peers: connections.size }, '[P2P] Peer error');
         peerStatusCallback?.('disconnected', connections.size);
       });
 
@@ -755,7 +755,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         try {
           await sendInitialSyncTo(conn, ctx, suggestionsGenerating);
         } catch (err: unknown) {
-          console.error(`[P2P] Initial sync failed: ${getErrorMessage(err)}`);
+          logger.error({ err }, '[P2P] Initial sync failed');
         }
       }, syncDelay);
 
@@ -814,12 +814,12 @@ export async function joinP2PSwarm(
       connections.set(remoteKey, conn);
       registerPeerQueue(remoteKey, conn);
       if (!info.publicKey) enforceAnonCap();
-      console.log(`[P2P] Connected to host! Total peers: ${connections.size}`);
+      logger.debug(`[P2P] Connected to host! Total peers: ${connections.size}`);
 
       conn.on('data', async (data: Buffer) => {
-        console.log(`[P2P] Received data from ${remoteKey}:`, data.length, 'bytes');
+        logger.debug(`[P2P] Received data from ${remoteKey}: ${data.length} bytes`);
         const message = b4a.toString(data).trim();
-        console.log(`P2P received: ${message}`);
+        logger.debug(`P2P received: ${message}`);
 
         if (messageHandler) {
           try {
@@ -840,12 +840,12 @@ export async function joinP2PSwarm(
           removePeerQueue(conn);
           recordDisconnect(remoteKey);
         }
-        console.log(`[P2P] Disconnected from host. Remaining peers: ${connections.size}`);
+        logger.debug(`[P2P] Disconnected from host. Remaining peers: ${connections.size}`);
       });
 
       conn.on('error', (err: Error) => {
         clearTimeout(clientStabilityTimer);
-        console.error(`[P2P] Connection error: ${getErrorMessage(err)}`);
+        logger.error({ err }, '[P2P] Connection error');
         if (connections.get(remoteKey) === conn) {
           connections.delete(remoteKey);
           removePeerQueue(conn);

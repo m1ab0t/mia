@@ -184,7 +184,7 @@ export async function sendDailyGreetingTo(conn: Duplex, ctx: MessageHandlerConte
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'daily_greeting', message }) + '\n'));
     }
   } catch (err: unknown) {
-    console.error(`[P2P] Daily greeting failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Daily greeting failed');
   }
 }
 
@@ -205,7 +205,7 @@ export async function sendSuggestionsTo(
     const greetings = getSuggestionsService().getGreetings();
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'suggestions', suggestions, greetings }) + '\n'));
   } catch (err: unknown) {
-    console.error(`[P2P] Suggestions action failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Suggestions action failed');
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'suggestions', suggestions: [], greetings: [] }) + '\n'));
   }
 }
@@ -224,7 +224,7 @@ export async function sendSchedulerTasksTo(
     const tasks = await cb(params);
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'scheduler_tasks', tasks }) + '\n'));
   } catch (err: unknown) {
-    console.error(`[P2P] Scheduler action failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Scheduler action failed');
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'scheduler_tasks', tasks: [] }) + '\n'));
   }
 }
@@ -236,9 +236,9 @@ export async function sendPluginsListTo(conn: Duplex, ctx: MessageHandlerContext
     const info = await cb();
     const data = JSON.stringify({ type: 'plugins', plugins: info.plugins, activePlugin: info.activePlugin }) + '\n';
     writeToConn(conn, b4a.from(data));
-    console.log(`[P2P] Sent ${info.plugins.length} plugins to peer (active: ${info.activePlugin})`);
+    logger.debug(`[P2P] Sent ${info.plugins.length} plugins to peer (active: ${info.activePlugin})`);
   } catch (err: unknown) {
-    console.error(`[P2P] Plugin list failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Plugin list failed');
   }
 }
 
@@ -252,9 +252,9 @@ export async function sendConversationListTo(conn: Duplex, ctx: MessageHandlerCo
       currentConversationId: ctx.getCurrentConversationId(),
     }) + '\n';
     writeToConn(conn, b4a.from(data));
-    console.log(`[P2P] Sent ${conversations.length} conversations to peer`);
+    logger.debug(`[P2P] Sent ${conversations.length} conversations to peer`);
   } catch (err: unknown) {
-    console.error(`[P2P] Conversations list failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Conversations list failed');
   }
 }
 
@@ -461,11 +461,9 @@ export async function replayHistory(conn: Duplex, ctx: MessageHandlerContext): P
       hasMore,
     }) + '\n';
     writeToConn(conn, b4a.from(data));
-    console.log(
-      `[P2P] Replayed ${messages.length} history messages (${timeline.length} timeline entries) to peer`,
-    );
+    logger.debug(`[P2P] Replayed ${messages.length} history messages (${timeline.length} timeline entries) to peer`);
   } catch (err: unknown) {
-    console.error(`[P2P] History replay failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] History replay failed');
   }
 }
 
@@ -491,11 +489,9 @@ async function handleHistoryRequest(
       hasMore: result.hasMore,
     }) + '\n';
     writeToConn(conn, b4a.from(data));
-    console.log(
-      `[P2P] Sent ${result.messages.length} older messages (${timeline.length} entries, hasMore: ${result.hasMore})`,
-    );
+    logger.debug(`[P2P] Sent ${result.messages.length} older messages (${timeline.length} entries, hasMore: ${result.hasMore})`);
   } catch (err: unknown) {
-    console.error(`[P2P] History request failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] History request failed');
   }
 }
 
@@ -517,9 +513,9 @@ async function handleSearchRequest(
     const results = await searchConversations(query.trim(), 20);
     const data = JSON.stringify({ type: 'search_results', requestId, results }) + '\n';
     writeToConn(conn, b4a.from(data));
-    console.log(`[P2P] Search "${query}" → ${results.length} results`);
+    logger.debug(`[P2P] Search "${query}" → ${results.length} results`);
   } catch (err: unknown) {
-    console.error(`[P2P] Search request failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Search request failed');
     writeToConn(
       conn,
       b4a.from(
@@ -538,12 +534,12 @@ async function handleRestartRequest(ctx: MessageHandlerContext): Promise<void> {
       sendToAll({ type: 'error', message: 'Failed to write restart signal file' });
       return;
     }
-    console.log('[P2P] Restart signal written, notifying peers and signalling daemon...');
+    logger.debug('[P2P] Restart signal written, notifying peers and signalling daemon...');
     sendToAll({ type: 'server_restarting', conversationId: ctx.getCurrentConversationId() });
     await new Promise<void>(r => setTimeout(r, 400));
     process.stdout.write(JSON.stringify({ type: 'control_restart' }) + '\n');
   } catch (err) {
-    console.error(`[P2P] Restart request failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Restart request failed');
     sendToAll({ type: 'error', message: 'Server restart failed' });
   }
 }
@@ -555,10 +551,10 @@ async function handleNewConversation(_conn: Duplex, ctx: MessageHandlerContext):
     if (cb) cb();
     ctx.setCurrentConversationId(null);
     ctx.setCurrentAssistantText('');
-    console.log('[P2P] Cleared conversation state - new conversation will be created on first message');
+    logger.debug('[P2P] Cleared conversation state - new conversation will be created on first message');
     await broadcastHistoryReset(ctx);
   } catch (err: unknown) {
-    console.error(`[P2P] New conversation failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] New conversation failed');
   }
 }
 
@@ -571,10 +567,10 @@ async function handleRenameConversation(
   if (!ctx.isMessageStoreReady()) return;
   try {
     await renameConversation(convId, title);
-    console.log(`[P2P] Renamed conversation ${convId} to "${title}"`);
+    logger.debug(`[P2P] Renamed conversation ${convId} to "${title}"`);
     await broadcastConversationList(ctx);
   } catch (err: unknown) {
-    console.error(`[P2P] Rename conversation failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Rename conversation failed');
   }
 }
 
@@ -587,7 +583,7 @@ async function handleDeleteConversation(
   try {
     await deleteConversation(convId);
     ctx.evictFirstUserMessages([convId]);
-    console.log(`[P2P] Deleted conversation ${convId}`);
+    logger.debug(`[P2P] Deleted conversation ${convId}`);
     if (ctx.getCurrentConversationId() === convId) {
       ctx.setCurrentConversationId(null);
       ctx.setCurrentAssistantText('');
@@ -596,7 +592,7 @@ async function handleDeleteConversation(
       await broadcastConversationList(ctx);
     }
   } catch (err: unknown) {
-    console.error(`[P2P] Delete conversation failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Delete conversation failed');
   }
 }
 
@@ -608,13 +604,13 @@ async function handleDeleteAllConversations(
   try {
     await deleteAllConversations();
     ctx.evictFirstUserMessages();
-    console.log('[P2P] Deleted all conversations');
+    logger.debug('[P2P] Deleted all conversations');
     ctx.setCurrentConversationId(null);
     ctx.setCurrentAssistantText('');
-    console.log('[P2P] Reset to draft mode after delete-all');
+    logger.debug('[P2P] Reset to draft mode after delete-all');
     await broadcastHistoryReset(ctx);
   } catch (err: unknown) {
-    console.error(`[P2P] Delete all conversations failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Delete all conversations failed');
   }
 }
 
@@ -628,7 +624,7 @@ async function handleDeleteMultipleConversations(
     let currentDeleted = false;
     for (const id of conversationIds) {
       await deleteConversation(id);
-      console.log(`[P2P] Deleted conversation: ${id}`);
+      logger.debug(`[P2P] Deleted conversation: ${id}`);
       if (id === ctx.getCurrentConversationId()) {
         currentDeleted = true;
       }
@@ -642,7 +638,7 @@ async function handleDeleteMultipleConversations(
       await broadcastConversationList(ctx);
     }
   } catch (err: unknown) {
-    console.error(`[P2P] Delete multiple conversations failed: ${getErrorMessage(err)}`);
+    logger.error({ err }, '[P2P] Delete multiple conversations failed');
   }
 }
 
@@ -667,9 +663,7 @@ export function createConnectionDataHandler(
     try {
       connDataBuffer += b4a.toString(data);
       if (Buffer.byteLength(connDataBuffer, 'utf8') > MAX_CONN_BUFFER_BYTES) {
-        console.warn(
-          `[P2P] Closing connection: inbound buffer exceeded ${MAX_CONN_BUFFER_BYTES} bytes`,
-        );
+        logger.warn(`[P2P] Closing connection: inbound buffer exceeded ${MAX_CONN_BUFFER_BYTES} bytes`);
         connDataBuffer = '';
         conn.destroy();
         return;
@@ -723,7 +717,7 @@ async function handleConnMessage(
     }
   }
 
-  console.log(`P2P received: ${message.substring(0, 200)}${message.length > 200 ? '...' : ''}`);
+  logger.debug(`P2P received: ${message.substring(0, 200)}${message.length > 200 ? '...' : ''}`);
 
   // ── 3. Parse as a typed control message ───────────────────────────────
   const parsed = parseMobileInbound(message);
@@ -739,7 +733,7 @@ async function handleConnMessage(
       'suggestions',
     ]);
     if (OUTBOUND_TYPES.has(parsed.type)) {
-      console.log(`[P2P] Dropped echoed outbound message type '${parsed.type}' from peer`);
+      logger.debug(`[P2P] Dropped echoed outbound message type '${parsed.type}' from peer`);
       return;
     }
 
@@ -795,10 +789,10 @@ async function handleConnMessage(
           } else {
             writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: result.error }) + '\n'));
           }
-          console.log(`[P2P] Plugin switch to '${parsed.name}': ${result.success ? 'ok' : result.error}`);
+          logger.debug(`[P2P] Plugin switch to '${parsed.name}': ${result.success ? 'ok' : result.error}`);
         }
       } catch (err: unknown) {
-        console.error(`[P2P] Plugin switch failed: ${getErrorMessage(err)}`);
+        logger.error({ err }, '[P2P] Plugin switch failed');
         writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: getErrorMessage(err) }) + '\n'));
       }
       return;
@@ -902,9 +896,7 @@ async function handleConnMessage(
           mimeType: typeof img.mimeType === 'string' ? img.mimeType : 'image/jpeg',
         };
         textMessage = typeof raw.text === 'string' ? raw.text : 'Describe this image';
-        console.log(
-          `[P2P] Image attachment detected (${image.mimeType}, ${(image.data.length / 1024).toFixed(0)}KB base64)`,
-        );
+        logger.debug(`[P2P] Image attachment detected (${image.mimeType}, ${(image.data.length / 1024).toFixed(0)}KB base64)`);
       }
     } catch {
       // Not JSON — treat as plain text user message
@@ -913,7 +905,7 @@ async function handleConnMessage(
 
   // ── 5. Anti-echo guard ────────────────────────────────────────────────
   if (!image && isEchoedResponse(textMessage)) {
-    console.log(`[P2P] Dropped echoed response (hash match): ${textMessage.substring(0, 80)}...`);
+    logger.debug(`[P2P] Dropped echoed response (hash match): ${textMessage.substring(0, 80)}...`);
     return;
   }
 
@@ -926,10 +918,10 @@ async function handleConnMessage(
           const { createConversation } = await import('./message-store');
           const conv = await createConversation('New conversation');
           ctx.setCurrentConversationId(conv.id);
-          console.log(`[P2P] Auto-created conversation on first message: ${conv.id}`);
+          logger.debug(`[P2P] Auto-created conversation on first message: ${conv.id}`);
           await broadcastConversationList(ctx);
         } else {
-          console.warn('[P2P] Message store unavailable — processing message without persistence');
+          logger.warn('[P2P] Message store unavailable — processing message without persistence');
         }
       }
       await ctx.storeUserMessage(textMessage);
