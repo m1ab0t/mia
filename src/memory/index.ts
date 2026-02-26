@@ -80,6 +80,32 @@ export interface MemoryEntry {
   [key: string]: unknown; // Index signature for LanceDB compatibility
 }
 
+/**
+ * Exhaustive whitelist of every value in the `MemoryEntry['type']` union.
+ * Update this array whenever the union changes — TypeScript will flag any
+ * mismatch because the `satisfies` check below enforces parity.
+ */
+const MEMORY_ENTRY_TYPES = [
+  'conversation',
+  'fact',
+  'context',
+  'summary',
+] as const satisfies ReadonlyArray<MemoryEntry['type']>;
+
+/**
+ * Validates that `value` is a known `MemoryEntry['type']` literal.
+ * Throws a `TypeError` if the value is not in the whitelist so the caller
+ * never reaches the LanceDB `.where()` interpolation with untrusted input.
+ */
+function assertValidMemoryType(value: unknown): asserts value is MemoryEntry['type'] {
+  if (!(MEMORY_ENTRY_TYPES as ReadonlyArray<unknown>).includes(value)) {
+    throw new TypeError(
+      `Invalid memory type "${String(value)}". ` +
+      `Must be one of: ${MEMORY_ENTRY_TYPES.map(t => `"${t}"`).join(', ')}.`
+    );
+  }
+}
+
 export interface MemorySearchResult {
   content: string;
   type: string;
@@ -623,6 +649,12 @@ export class MemoryStore {
     type: MemoryEntry['type'],
     limit: number = 5
   ): Promise<MemorySearchResult[]> {
+    // Validate `type` against the whitelist before it is ever interpolated into
+    // a LanceDB filter string.  TypeScript's static types are bypassed by
+    // callers that pass unvalidated runtime values (e.g. parsed JSON), so we
+    // enforce the constraint at runtime too.
+    assertValidMemoryType(type);
+
     if (!this.db || !this.embeddingFn) {
       return [];
     }
