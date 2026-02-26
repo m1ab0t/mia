@@ -31,7 +31,8 @@
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { x, bold, dim, cyan, green, red, yellow, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { extractSection } from './parse-utils.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -171,22 +172,6 @@ export function buildPlanPrompt(opts: BuildPlanPromptOpts): string {
 }
 
 // ── Output parsing ────────────────────────────────────────────────────────────
-
-function extractSection(text: string, name: string, nextNames: string[]): string {
-  const headerRe = new RegExp(`^${name}:\\s*\\r?\\n?`, 'im');
-  const match = text.match(headerRe);
-  if (!match || match.index === undefined) return '';
-  const start = match.index + match[0].length;
-  let end = text.length;
-  for (const next of nextNames) {
-    const re = new RegExp(`^${next}:`, 'im');
-    const nm = text.slice(start).match(re);
-    if (nm && nm.index !== undefined) {
-      end = Math.min(end, start + nm.index);
-    }
-  }
-  return text.slice(start, end).trim();
-}
 
 /**
  * Parse the AI's structured output into a typed PlanContent.
@@ -394,70 +379,26 @@ export async function handlePlanCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // ── Load plugin ─────────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
   const goalPreview = goal.length > 60 ? goal.slice(0, 57) + '…' : goal;
 
-  console.log();
-  console.log(`  ${dim}plan${x}  ${dim}${activePluginName}${x}  ${dim}${args.depth}${x}`);
-  console.log(`  ${dim}"${goalPreview}"${x}`);
-  console.log();
-  process.stdout.write(`  ${dim}thinking…${x}`);
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-    console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-    console.log();
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ────────────────────────────────────────────────────────────
-  const planConvId = `plan-${Date.now()}`;
-  const pluginContext = await buildCommandContext(goal, planConvId, args.cwd, args.noContext);
-
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      pluginContext,
-      {
-        conversationId: planConvId,
-        workingDirectory: args.cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* plan gen doesn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          process.stdout.write('\r                              \r');
-          console.log(`  ${red}error${x}  ${err.message}`);
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}dispatch error${x}  ${msg}`);
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+  const { output, failed } = await dispatchToPlugin({
+    command: 'plan',
+    prompt,
+    cwd: args.cwd,
+    noContext: args.noContext,
+    raw: args.raw,
+    onReady: (pluginName) => {
+      console.log();
+      console.log(`  ${dim}plan${x}  ${dim}${pluginName}${x}  ${dim}${args.depth}${x}`);
+      console.log(`  ${dim}"${goalPreview}"${x}`);
+      console.log();
+      process.stdout.write(`  ${dim}thinking…${x}`);
+    },
+  });
 
   process.stdout.write('\r                              \r');
 
-  if (failed || !rawOutput) {
+  if (failed || !output) {
     console.log(`  ${red}error${x} ${dim}plugin returned no output${x}`);
     process.exit(1);
   }
@@ -465,13 +406,13 @@ export async function handlePlanCommand(argv: string[]): Promise<void> {
   // ── Render / write ──────────────────────────────────────────────────────────
 
   if (args.raw) {
-    renderRawPlan(rawOutput);
+    renderRawPlan(output);
     process.exit(0);
   }
 
-  const plan = parsePlanOutput(rawOutput);
+  const plan = parsePlanOutput(output);
   if (!plan) {
-    renderRawPlan(rawOutput);
+    renderRawPlan(output);
     process.exit(0);
   }
 

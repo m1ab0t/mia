@@ -35,7 +35,8 @@ import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { extractSection } from './parse-utils.js';
 
 /** Max characters of commit log sent to the plugin. */
 const MAX_LOG_CHARS = 12_000;
@@ -281,25 +282,6 @@ export function buildChangelogPrompt(opts: BuildChangelogPromptOpts): string {
 // ── Output parsing ────────────────────────────────────────────────────────────
 
 /**
- * Extract a named section from the structured AI output.
- */
-function extractSection(text: string, name: string, nextNames: string[]): string {
-  const headerRe = new RegExp(`^${name}:\\s*\\r?\\n?`, 'im');
-  const match = text.match(headerRe);
-  if (!match || match.index === undefined) return '';
-  const start = match.index + match[0].length;
-  let end = text.length;
-  for (const next of nextNames) {
-    const re = new RegExp(`^${next}:`, 'im');
-    const nm = text.slice(start).match(re);
-    if (nm && nm.index !== undefined) {
-      end = Math.min(end, start + nm.index);
-    }
-  }
-  return text.slice(start, end).trim();
-}
-
-/**
  * Parse bullet lines from a section, filtering out "none".
  */
 function parseBullets(text: string): string[] {
@@ -531,91 +513,42 @@ export async function handleChangelogCommand(argv: string[]): Promise<void> {
   const version = args.version ?? 'UNRELEASED';
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
-  // ── Load plugin ──────────────────────────────────────────────────────────
-
-  const { plugin, name: activePluginName } = await loadActivePlugin();
+  // ── Dispatch to plugin ──────────────────────────────────────────────────
 
   const rangeLabel = resolvedFrom ? `${resolvedFrom}..${args.to}` : `initial..${args.to}`;
 
-  console.log();
-  console.log(`  ${dim}changelog${x}  ${dim}${activePluginName}${x}  ${dim}${commitCount} commits · ${rangeLabel}${x}`);
-  console.log();
-  process.stdout.write(`  ${dim}thinking…${x}`);
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-    console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-    console.log();
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ────────────────────────────────────────────────────────
-
-  const changelogConvId = `changelog-${Date.now()}`;
-  const pluginContext = await buildCommandContext(
-    `generate changelog from ${commitCount} commits`,
-    changelogConvId,
-    args.cwd,
-    args.noContext,
-  );
-
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      pluginContext,
-      {
-        conversationId: changelogConvId,
-        workingDirectory: args.cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* changelog doesn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          process.stdout.write('\r                              \r');
-          console.log(`  ${red}error${x}  ${err.message}`);
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}dispatch error${x}  ${msg}`);
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+  const { output, failed } = await dispatchToPlugin({
+    command: 'changelog',
+    prompt,
+    cwd: args.cwd,
+    noContext: args.noContext,
+    raw: args.raw,
+    onReady: (pluginName) => {
+      console.log();
+      console.log(`  ${dim}changelog${x}  ${dim}${pluginName}${x}  ${dim}${commitCount} commits · ${rangeLabel}${x}`);
+      console.log();
+      process.stdout.write(`  ${dim}thinking…${x}`);
+    },
+  });
 
   process.stdout.write('\r                              \r');
 
-  if (failed || !rawOutput) {
+  if (failed || !output) {
     console.log(`  ${red}error${x} ${dim}plugin returned no output${x}`);
     process.exit(1);
   }
 
   if (args.raw) {
-    renderRawChangelog(rawOutput);
+    renderRawChangelog(output);
     process.exit(0);
   }
 
   // ── Parse & render ───────────────────────────────────────────────────────
 
-  const entry = parseChangelogOutput(rawOutput, version, date);
+  const entry = parseChangelogOutput(output, version, date);
   if (!entry) {
     // Fall back to raw output if parsing failed
-    renderRawChangelog(rawOutput);
+    renderRawChangelog(output);
     process.exit(0);
   }
 

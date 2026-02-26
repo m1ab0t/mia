@@ -46,10 +46,9 @@ import {
   statSync,
 } from 'fs';
 import { join, relative, isAbsolute, basename, extname, dirname } from 'path';
-import { randomBytes } from 'crypto';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -520,79 +519,39 @@ export async function handleScaffoldCommand(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── Header ────────────────────────────────────────────────────────────────
-
-  if (!raw) {
-    console.log(DASH);
-    console.log(`${bold}scaffold${x} ${dim}·${x} ${cyan}${outputRelPath}${x}`);
-    if (description) console.log(`${dim}desc     ·${x} ${description}`);
-    if (examples.length > 0) {
-      console.log(`${dim}examples ·${x} ${examples.map(e => e.relPath).join(', ')}`);
-    } else {
-      console.log(`${dim}examples ·${x} ${yellow}none found — generating from conventions${x}`);
-    }
-    if (write) {
-      console.log(`${dim}mode     ·${x} ${yellow}write${x} ${dim}(file will be created)${x}`);
-    }
-    console.log(DASH);
-    console.log();
-  }
-
   // ── Plugin dispatch ───────────────────────────────────────────────────────
 
-  const { plugin } = await loadActivePlugin();
-  const conversationId = `scaffold-${randomBytes(4).toString('hex')}`;
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
+  const { output, failed } = await dispatchToPlugin({
+    command: 'scaffold',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    onReady: () => {
+      if (!raw) {
+        console.log(DASH);
+        console.log(`${bold}scaffold${x} ${dim}·${x} ${cyan}${outputRelPath}${x}`);
+        if (description) console.log(`${dim}desc     ·${x} ${description}`);
+        if (examples.length > 0) {
+          console.log(`${dim}examples ·${x} ${examples.map(e => e.relPath).join(', ')}`);
+        } else {
+          console.log(`${dim}examples ·${x} ${yellow}none found — generating from conventions${x}`);
+        }
+        if (write) {
+          console.log(`${dim}mode     ·${x} ${yellow}write${x} ${dim}(file will be created)${x}`);
+        }
+        console.log(DASH);
+        console.log();
+      }
+    },
+    onToken: (token: string) => {
+      process.stdout.write(token);
+    },
+  });
 
-  let fullOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          fullOutput += token;
-          process.stdout.write(token);
-        },
-        onToolCall: (_toolName: string) => { /* scaffold is read-only */ },
-        onToolResult: (_name: string, _result: string) => { /* no-op */ },
-        onDone: (_finalOutput: string) => { /* collected via onToken */ },
-        onError: (err: Error) => {
-          failed = true;
-          if (!raw) {
-            console.error(`\n${red}error${x} ${dim}·${x} ${err.message}`);
-          } else {
-            process.stderr.write(`mia scaffold: error: ${err.message}\n`);
-          }
-        },
-      },
-    );
-
-    if (!fullOutput && result.output) {
-      fullOutput = result.output;
-      process.stdout.write(result.output);
-    }
-
-    if (fullOutput && !fullOutput.endsWith('\n')) {
-      process.stdout.write('\n');
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!raw) {
-      console.error(`\n${red}dispatch error${x} ${dim}·${x} ${msg}`);
-    } else {
-      process.stderr.write(`mia scaffold: dispatch error: ${msg}\n`);
-    }
+  if (output && !output.endsWith('\n')) {
+    process.stdout.write('\n');
   }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
 
   if (failed) {
     process.exit(1);
@@ -601,7 +560,7 @@ export async function handleScaffoldCommand(argv: string[]): Promise<void> {
   // ── Write mode ────────────────────────────────────────────────────────────
 
   if (write) {
-    const code = extractScaffoldedCode(fullOutput);
+    const code = extractScaffoldedCode(output);
 
     if (!code) {
       if (!raw) {

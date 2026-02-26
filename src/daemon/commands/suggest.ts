@@ -39,18 +39,16 @@ import {
   readdirSync,
 } from 'fs';
 import { join, relative, isAbsolute, basename, extname } from 'path';
-import { randomBytes } from 'crypto';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 import { readFileTruncated, statSafe } from '../../utils/fs-utils.js';
 
+import {
+  MAX_SOURCE_CHARS_STANDARD as MAX_FILE_CHARS,
+  MAX_TOTAL_CHARS_SUGGEST as MAX_TOTAL_CHARS,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Max chars read from a single source file. */
-const MAX_FILE_CHARS = 14_000;
-
-/** Max total chars across all files when a directory is given. */
-const MAX_TOTAL_CHARS = 24_000;
 
 /** Max files to scan when targeting a directory. */
 const MAX_DIR_FILES = 8;
@@ -588,74 +586,34 @@ export async function handleSuggestCommand(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── Header ───────────────────────────────────────────────────────────────────
-
-  if (!raw) {
-    console.log(DASH);
-    console.log(`${bold}suggest${x} ${dim}·${x} ${cyan}${targetLabel}${x}`);
-    console.log(`${dim}category ·${x} ${category}`);
-    console.log(`${dim}limit    ·${x} ${limit}`);
-    if (files.length > 1) console.log(`${dim}files    ·${x} ${files.length} source files`);
-    if (apply) console.log(`${dim}mode     ·${x} ${yellow}apply${x} ${dim}(high-priority improvements will be written)${x}`);
-    console.log(DASH);
-    console.log();
-  }
-
   // ── Plugin dispatch ──────────────────────────────────────────────────────────
 
-  const { plugin } = await loadActivePlugin();
-  const conversationId = `suggest-${randomBytes(4).toString('hex')}`;
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
+  const { output, failed } = await dispatchToPlugin({
+    command: 'suggest',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    onReady: () => {
+      if (!raw) {
+        console.log(DASH);
+        console.log(`${bold}suggest${x} ${dim}·${x} ${cyan}${targetLabel}${x}`);
+        console.log(`${dim}category ·${x} ${category}`);
+        console.log(`${dim}limit    ·${x} ${limit}`);
+        if (files.length > 1) console.log(`${dim}files    ·${x} ${files.length} source files`);
+        if (apply) console.log(`${dim}mode     ·${x} ${yellow}apply${x} ${dim}(high-priority improvements will be written)${x}`);
+        console.log(DASH);
+        console.log();
+      }
+    },
+    onToken: (token: string) => {
+      process.stdout.write(token);
+    },
+  });
 
-  let fullOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          fullOutput += token;
-          process.stdout.write(token);
-        },
-        onToolCall: (_toolName: string) => { /* suggest is read-only */ },
-        onToolResult: (_name: string, _result: string) => { /* no-op */ },
-        onDone: (_finalOutput: string) => { /* collected via onToken */ },
-        onError: (err: Error) => {
-          failed = true;
-          if (!raw) {
-            console.error(`\n${red}error${x} ${dim}·${x} ${err.message}`);
-          } else {
-            process.stderr.write(`mia suggest: error: ${err.message}\n`);
-          }
-        },
-      },
-    );
-
-    if (!fullOutput && result.output) {
-      fullOutput = result.output;
-      process.stdout.write(result.output);
-    }
-
-    if (fullOutput && !fullOutput.endsWith('\n')) {
-      process.stdout.write('\n');
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!raw) {
-      console.error(`\n${red}dispatch error${x} ${dim}·${x} ${msg}`);
-    } else {
-      process.stderr.write(`mia suggest: dispatch error: ${msg}\n`);
-    }
+  if (output && !output.endsWith('\n')) {
+    process.stdout.write('\n');
   }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
 
   if (failed) process.exit(1);
 
@@ -665,7 +623,7 @@ export async function handleSuggestCommand(argv: string[]): Promise<void> {
   // a targeted refactoring description.
 
   if (apply && !raw && !failed) {
-    const parsed = parseSuggestOutput(fullOutput);
+    const parsed = parseSuggestOutput(output);
     const highItems = parsed.items.filter(i => i.priority === 'HIGH');
 
     if (highItems.length > 0) {
@@ -709,7 +667,7 @@ export async function handleSuggestCommand(argv: string[]): Promise<void> {
   //  gives real-time feedback; we now render the parsed summary below it.)
 
   if (!raw) {
-    const parsed = parseSuggestOutput(fullOutput);
+    const parsed = parseSuggestOutput(output);
     if (parsed.items.length > 0) {
       console.log();
       renderSuggestResult(parsed, targetLabel, category);

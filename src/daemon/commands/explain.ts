@@ -30,7 +30,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, extname, basename, dirname } from 'path';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { extractSection } from './parse-utils.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -397,26 +398,6 @@ export function buildExplainPrompt(opts: BuildExplainPromptOpts): string {
 // ── Output parsing ────────────────────────────────────────────────────────────
 
 /**
- * Extract a named section from the structured AI output.
- * The section ends at the next section header or end of string.
- */
-function extractSection(text: string, name: string, nextNames: string[]): string {
-  const headerRe = new RegExp(`^${name}:\\s*\\r?\\n?`, 'im');
-  const match = text.match(headerRe);
-  if (!match || match.index === undefined) return '';
-  const start = match.index + match[0].length;
-  let end = text.length;
-  for (const next of nextNames) {
-    const re = new RegExp(`^${next}:`, 'im');
-    const nm = text.slice(start).match(re);
-    if (nm && nm.index !== undefined) {
-      end = Math.min(end, start + nm.index);
-    }
-  }
-  return text.slice(start, end).trim();
-}
-
-/**
  * Parse the structured AI output into typed ExplainContent.
  * Exported for testing.
  */
@@ -669,9 +650,6 @@ export async function handleExplainCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // ── Load plugin ─────────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
   // Label for type
   const typeLabel: Record<ExplainTarget, string> = {
     file: 'file',
@@ -679,82 +657,36 @@ export async function handleExplainCommand(argv: string[]): Promise<void> {
     concept: 'concept',
   };
 
-  console.log();
-  console.log(`  ${dim}explain${x}  ${dim}${activePluginName}${x}  ${dim}${typeLabel[args.targetType]} · ${args.depth}${x}`);
-  if (targetLabel) console.log(`  ${dim}${targetLabel}${x}`);
-  console.log();
-  process.stdout.write(`  ${dim}thinking…${x}`);
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-    console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-    console.log();
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ───────────────────────────────────────────────────────────
-  const explainConvId = `explain-${Date.now()}`;
-  const pluginContext = await buildCommandContext(
-    args.query ?? `explain ${targetLabel}`,
-    explainConvId,
-    args.cwd,
-    args.noContext,
-  );
-
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      pluginContext,
-      {
-        conversationId: explainConvId,
-        workingDirectory: args.cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* explain shouldn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          process.stdout.write('\r                              \r');
-          console.log(`  ${red}error${x}  ${err.message}`);
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}dispatch error${x}  ${msg}`);
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+  const { output, failed } = await dispatchToPlugin({
+    command: 'explain',
+    prompt,
+    cwd: args.cwd,
+    noContext: args.noContext,
+    raw: args.raw,
+    onReady: (pluginName) => {
+      console.log();
+      console.log(`  ${dim}explain${x}  ${dim}${pluginName}${x}  ${dim}${typeLabel[args.targetType]} · ${args.depth}${x}`);
+      if (targetLabel) console.log(`  ${dim}${targetLabel}${x}`);
+      console.log();
+      process.stdout.write(`  ${dim}thinking…${x}`);
+    },
+  });
 
   process.stdout.write('\r                              \r');
 
-  if (failed || !rawOutput) {
+  if (failed || !output) {
     console.log(`  ${red}error${x} ${dim}plugin returned no output${x}`);
     process.exit(1);
   }
 
   if (args.raw) {
-    renderRawExplain(rawOutput);
+    renderRawExplain(output);
     process.exit(0);
   }
 
-  const explain = parseExplainOutput(rawOutput);
+  const explain = parseExplainOutput(output);
   if (!explain) {
-    renderRawExplain(rawOutput);
+    renderRawExplain(output);
     process.exit(0);
   }
 

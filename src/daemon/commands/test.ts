@@ -40,19 +40,16 @@ import {
 import { join, relative, extname, basename, dirname } from 'path';
 import { spawnSync } from 'child_process';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
 
+import {
+  MAX_SOURCE_CHARS_STANDARD as MAX_SOURCE_CHARS,
+  MAX_EXAMPLE_CHARS_TEST as MAX_EXAMPLE_CHARS,
+  MAX_EXAMPLES_TOTAL_TEST as MAX_EXAMPLES_TOTAL,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Max chars read from the target source file. */
-const MAX_SOURCE_CHARS = 14_000;
-
-/** Max chars read from a single example test file. */
-const MAX_EXAMPLE_CHARS = 3_000;
-
-/** Max combined chars from all example test files. */
-const MAX_EXAMPLES_TOTAL = 6_000;
 
 /** Max number of example test files to include in the prompt. */
 const MAX_EXAMPLE_FILES = 3;
@@ -664,91 +661,43 @@ export async function handleTestCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // ── Load plugin ──────────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
+  // ── Dispatch to plugin ────────────────────────────────────────────────────────
   const runnerLabel = runner === 'unknown' ? 'vitest (assumed)' : runner;
   const existsAlready = existsSync(outputPath);
 
-  console.log();
-  console.log(`  ${dim}test gen${x}  ${dim}${activePluginName}${x}  ${dim}${runnerLabel}${x}`);
-  console.log(`  ${dim}source:${x} ${sourceRelPath}`);
-  console.log(`  ${dim}output:${x} ${outputRelPath}${existsAlready ? ` ${yellow}(will overwrite)${x}` : ''}`);
-  if (exampleTests.length > 0) {
-    console.log(`  ${dim}style refs: ${exampleTests.length} example test(s)${x}`);
-  }
-  console.log();
-  process.stdout.write(`  ${dim}generating…${x}`);
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-    console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-    console.log();
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ────────────────────────────────────────────────────────────
-  const testConvId = `test-${Date.now()}`;
-  const pluginContext = await buildCommandContext(
-    `generate tests for ${sourceRelPath}`,
-    testConvId,
-    args.cwd,
-    args.noContext,
-  );
-
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      pluginContext,
-      {
-        conversationId: testConvId,
-        workingDirectory: args.cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* test gen shouldn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          process.stdout.write('\r                              \r');
-          console.log(`  ${red}error${x}  ${err.message}`);
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stdout.write('\r                              \r');
-    console.log(`  ${red}dispatch error${x}  ${msg}`);
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+  const { output, failed } = await dispatchToPlugin({
+    command: 'test',
+    prompt,
+    cwd: args.cwd,
+    noContext: args.noContext,
+    raw: args.raw,
+    onReady: (pluginName) => {
+      console.log();
+      console.log(`  ${dim}test gen${x}  ${dim}${pluginName}${x}  ${dim}${runnerLabel}${x}`);
+      console.log(`  ${dim}source:${x} ${sourceRelPath}`);
+      console.log(`  ${dim}output:${x} ${outputRelPath}${existsAlready ? ` ${yellow}(will overwrite)${x}` : ''}`);
+      if (exampleTests.length > 0) {
+        console.log(`  ${dim}style refs: ${exampleTests.length} example test(s)${x}`);
+      }
+      console.log();
+      process.stdout.write(`  ${dim}generating…${x}`);
+    },
+  });
 
   process.stdout.write('\r                              \r');
 
-  if (failed || !rawOutput) {
+  if (failed || !output) {
     console.log(`  ${red}error${x} ${dim}plugin returned no output${x}`);
     process.exit(1);
   }
 
   // ── Extract code ─────────────────────────────────────────────────────────────
-  const testCode = extractTestCode(rawOutput);
+  const testCode = extractTestCode(output);
 
   if (!testCode) {
     console.log(`  ${red}error${x} ${dim}could not extract test code from output${x}`);
     console.log();
-    console.log(rawOutput);
+    console.log(output);
     process.exit(1);
   }
 

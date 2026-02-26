@@ -38,7 +38,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, relative, dirname, basename } from 'path';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
 import {
   findCoverageReport,
@@ -63,10 +63,13 @@ import {
   type DetectedFramework,
 } from './test.js';
 
+import {
+  MAX_SOURCE_CHARS_STANDARD as MAX_SOURCE_CHARS,
+  MAX_EXISTING_TEST_CHARS,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const MAX_SOURCE_CHARS = 14_000;
-const MAX_EXISTING_TEST_CHARS = 6_000;
 const DEFAULT_THRESHOLD = 80;
 const DEFAULT_LIMIT = 3;
 
@@ -446,18 +449,6 @@ export async function handleCoverageCommand(argv: string[]): Promise<void> {
     console.log();
   }
 
-  // ── Load plugin (once, shared across all files) ───────────────────────────
-  const { plugin, name: pluginName } = await loadActivePlugin();
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    console.log(`  ${red}plugin not available${x}  ${dim}${pluginName}${x}`);
-    console.log(`  ${dim}run${x} ${cyan}mia plugin info ${pluginName}${x} ${dim}for install instructions${x}`);
-    console.log();
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
   let anyFailed = false;
 
   for (const stats of targets) {
@@ -497,10 +488,10 @@ export async function handleCoverageCommand(argv: string[]): Promise<void> {
     let existingTestContent: string | null = null;
     if (existsSync(canonicalTestPath)) {
       try {
-        const raw = readFileSync(canonicalTestPath, 'utf-8');
-        existingTestContent = raw.length > MAX_EXISTING_TEST_CHARS
-          ? raw.slice(0, MAX_EXISTING_TEST_CHARS) + '\n/* …truncated */'
-          : raw;
+        const rawContent = readFileSync(canonicalTestPath, 'utf-8');
+        existingTestContent = rawContent.length > MAX_EXISTING_TEST_CHARS
+          ? rawContent.slice(0, MAX_EXISTING_TEST_CHARS) + '\n/* …truncated */'
+          : rawContent;
       } catch { /* ignore */ }
     }
 
@@ -527,54 +518,21 @@ export async function handleCoverageCommand(argv: string[]): Promise<void> {
       continue;
     }
 
-    if (!args.raw) {
-      console.log(`  ${dim}generating coverage tests…${x}`);
-    }
-    process.stdout.write(args.raw ? '' : '');
+    // ── Dispatch to plugin ──────────────────────────────────────────────────
+    const { output, failed } = await dispatchToPlugin({
+      command: 'coverage',
+      prompt,
+      cwd: args.cwd,
+      noContext: args.noContext,
+      raw: args.raw,
+      onReady: (_pluginName) => {
+        if (!args.raw) {
+          console.log(`  ${dim}generating coverage tests…${x}`);
+        }
+      },
+    });
 
-    // ── Build context ────────────────────────────────────────────────────────
-    const convId = `coverage-${Date.now()}`;
-    const pluginContext = await buildCommandContext(
-      `generate coverage tests for ${sourceRelPath}`,
-      convId,
-      args.cwd,
-      args.noContext,
-    );
-
-    let rawOutput = '';
-    let failed = false;
-
-    try {
-      const result = await plugin.dispatch(
-        prompt,
-        pluginContext,
-        { conversationId: convId, workingDirectory: args.cwd },
-        {
-          onToken: (token: string) => { rawOutput += token; },
-          onToolCall: () => { /* coverage gen doesn't need tool calls */ },
-          onToolResult: () => { /* no-op */ },
-          onDone: (finalOutput: string) => {
-            if (!rawOutput && finalOutput) rawOutput = finalOutput;
-          },
-          onError: (err: Error) => {
-            failed = true;
-            if (!args.raw) {
-              console.log(`  ${red}error${x}  ${err.message}`);
-            }
-          },
-        },
-      );
-
-      if (!rawOutput && result.output) rawOutput = result.output;
-    } catch (err: unknown) {
-      failed = true;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!args.raw) {
-        console.log(`  ${red}dispatch error${x}  ${msg}`);
-      }
-    }
-
-    if (failed || !rawOutput) {
+    if (failed || !output) {
       if (!args.raw) {
         console.log(`  ${red}error${x} ${dim}plugin returned no output for ${sourceRelPath}${x}`);
       }
@@ -583,13 +541,13 @@ export async function handleCoverageCommand(argv: string[]): Promise<void> {
     }
 
     // ── Extract code ─────────────────────────────────────────────────────────
-    const testCode = extractTestCode(rawOutput);
+    const testCode = extractTestCode(output);
 
     if (!testCode) {
       if (!args.raw) {
         console.log(`  ${red}error${x} ${dim}could not extract test code from output${x}`);
         console.log();
-        console.log(rawOutput);
+        console.log(output);
       }
       anyFailed = true;
       continue;
@@ -660,11 +618,6 @@ export async function handleCoverageCommand(argv: string[]): Promise<void> {
       }
       console.log();
     }
-  }
-
-  // ── Shutdown ──────────────────────────────────────────────────────────────
-  if (!args.dryRun) {
-    try { await plugin.shutdown(); } catch { /* ignore */ }
   }
 
   if (!args.raw && !args.dryRun) {

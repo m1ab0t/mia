@@ -16,7 +16,9 @@
  */
 
 import { execFileSync } from 'child_process';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { extractSection, parseDiffStats, type DiffStats } from './parse-utils.js';
+import { MAX_DIFF_CHARS } from './config-constants.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -48,12 +50,6 @@ export interface ReviewArgs {
   dryRun: boolean;
   noContext: boolean;
   raw: boolean;
-}
-
-export interface DiffStats {
-  files: number;
-  added: number;
-  removed: number;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -179,23 +175,8 @@ export function resolveDiff(cwd: string, args: ReviewArgs): { diff: string; mode
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Diff stats
-// ──────────────────────────────────────────────────────────────────────────────
-
-export function parseDiffStats(diff: string): DiffStats {
-  if (!diff) return { files: 0, added: 0, removed: 0 };
-  const lines = diff.split('\n');
-  const files = lines.filter(l => l.startsWith('diff --git')).length;
-  const added = lines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
-  const removed = lines.filter(l => l.startsWith('-') && !l.startsWith('---')).length;
-  return { files, added, removed };
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
 // Prompt construction
 // ──────────────────────────────────────────────────────────────────────────────
-
-const MAX_DIFF_CHARS = 16_000;
 
 export interface BuildReviewPromptOpts {
   diff: string;
@@ -261,22 +242,6 @@ export function buildReviewPrompt(opts: BuildReviewPromptOpts): string {
 // ──────────────────────────────────────────────────────────────────────────────
 // Output parsing
 // ──────────────────────────────────────────────────────────────────────────────
-
-function extractSection(text: string, name: string, nextNames: string[]): string {
-  const headerRe = new RegExp(`^${name}:\\s*\\r?\\n?`, 'im');
-  const headerMatch = text.match(headerRe);
-  if (!headerMatch || headerMatch.index === undefined) return '';
-  const start = headerMatch.index + headerMatch[0].length;
-  let end = text.length;
-  for (const next of nextNames) {
-    const nextRe = new RegExp(`^${next}:`, 'im');
-    const nextMatch = text.slice(start).match(nextRe);
-    if (nextMatch && nextMatch.index !== undefined) {
-      end = Math.min(end, start + nextMatch.index);
-    }
-  }
-  return text.slice(start, end).trim();
-}
 
 export function parseReviewOutput(raw: string): ReviewContent | null {
   if (!raw || !raw.trim()) return null;
@@ -419,9 +384,6 @@ export async function handleReviewCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // ── Load plugin ───────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
   const modeLabels: Record<DiffMode, string> = {
     staged: 'staged',
     unstaged: 'unstaged',
@@ -429,77 +391,36 @@ export async function handleReviewCommand(argv: string[]): Promise<void> {
     head: 'HEAD diff',
   };
 
-  console.log();
-  console.log(`  ${D}review${R}  ${D}${activePluginName}${R}  ${D}${modeLabels[mode]}${R}`);
-  console.log(`  ${D}${stats.files} file${stats.files !== 1 ? 's' : ''} · +${stats.added} -${stats.removed}${R}`);
-  console.log();
-  process.stdout.write(`  ${D}analysing…${R}`);
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    process.stdout.write('\r                              \r');
-    console.log(`  ${RED}plugin not available${R}  ${D}${activePluginName}${R}`);
-    console.log(`  ${D}run${R} ${C}mia plugin info ${activePluginName}${R} ${D}for install instructions${R}`);
-    console.log();
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ─────────────────────────────────────────────────────────
-  const reviewConvId = `review-${Date.now()}`;
-  const pluginContext = await buildCommandContext('review code changes', reviewConvId, cwd, args.noContext);
-
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      pluginContext,
-      {
-        conversationId: reviewConvId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* review gen shouldn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          process.stdout.write('\r                              \r');
-          console.log(`  ${RED}error${R}  ${err.message}`);
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stdout.write('\r                              \r');
-    console.log(`  ${RED}dispatch error${R}  ${msg}`);
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+  const { output, failed } = await dispatchToPlugin({
+    command: 'review',
+    prompt,
+    cwd,
+    noContext: args.noContext,
+    raw: args.raw,
+    onReady: (pluginName) => {
+      console.log();
+      console.log(`  ${D}review${R}  ${D}${pluginName}${R}  ${D}${modeLabels[mode]}${R}`);
+      console.log(`  ${D}${stats.files} file${stats.files !== 1 ? 's' : ''} · +${stats.added} -${stats.removed}${R}`);
+      console.log();
+      process.stdout.write(`  ${D}analysing…${R}`);
+    },
+  });
 
   process.stdout.write('\r                              \r');
 
-  if (failed || !rawOutput) {
+  if (failed || !output) {
     console.log(`  ${RED}error${R} ${D}plugin returned no output${R}`);
     process.exit(1);
   }
 
   if (args.raw) {
-    renderRawReview(rawOutput);
+    renderRawReview(output);
     process.exit(0);
   }
 
-  const review = parseReviewOutput(rawOutput);
+  const review = parseReviewOutput(output);
   if (!review) {
-    renderRawReview(rawOutput);
+    renderRawReview(output);
     process.exit(0);
   }
 

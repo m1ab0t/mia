@@ -33,7 +33,8 @@
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, extname } from 'path';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { extractSection } from './parse-utils.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -388,22 +389,6 @@ export interface AnalyzeResult {
   raw: string;
 }
 
-function extractSection(text: string, header: string, nextHeaders: string[]): string {
-  const headerRe = new RegExp(`^${header}:\\s*\\r?\\n?`, 'im');
-  const match = text.match(headerRe);
-  if (!match || match.index === undefined) return '';
-  const start = match.index + match[0].length;
-  let end = text.length;
-  for (const next of nextHeaders) {
-    const nextRe = new RegExp(`^${next}:`, 'im');
-    const nextMatch = text.slice(start).match(nextRe);
-    if (nextMatch && nextMatch.index !== undefined) {
-      end = Math.min(end, start + nextMatch.index);
-    }
-  }
-  return text.slice(start, end).trim();
-}
-
 /**
  * Parse the AI analysis output into structured AnalyzeResult.
  * Exported for testing.
@@ -607,72 +592,27 @@ export async function handleTodoCommand(argv: string[]): Promise<void> {
       process.exit(0);
     }
 
-    const { plugin, name: pluginName } = await loadActivePlugin();
-
     const col = TYPE_COLOUR[entry.type] ?? dim;
-    if (!raw) {
-      console.log(`  ${col}${entry.type}${x}  ${dim}#${entry.index}  ${entry.file}:${entry.line}${x}`);
-      if (entry.content) console.log(`  ${dim}${entry.content}${x}`);
-      console.log(`  ${DASH}`);
-      console.log('');
-      process.stdout.write(`  ${dim}resolving…${x}\n\n  `);
-    }
 
-    const available = await plugin.isAvailable();
-    if (!available) {
-      console.log(`  ${red}plugin not available${x}  ${dim}${pluginName}${x}`);
-      console.log(`  ${dim}run${x} ${cyan}mia plugin info ${pluginName}${x} ${dim}for install instructions${x}`);
-      console.log('');
-      try { await plugin.shutdown(); } catch { /* ignore */ }
-      process.exit(1);
-    }
-
-    const fixConvId = `todo-fix-${fix}-${Date.now()}`;
-    const context = await buildCommandContext('resolve todo comment', fixConvId, cwd, noContext);
-
-    let rawOutput = '';
-    let failed = false;
-
-    try {
-      const result = await plugin.dispatch(
-        prompt,
-        context,
-        {
-          conversationId: fixConvId,
-          workingDirectory: cwd,
-        },
-        {
-          onToken: (token: string) => {
-            rawOutput += token;
-            process.stdout.write(token);
-          },
-          onToolCall: () => { /* no tool calls expected for fix */ },
-          onToolResult: () => { /* no-op */ },
-          onDone: (finalOutput: string) => {
-            if (!rawOutput && finalOutput) {
-              rawOutput = finalOutput;
-              process.stdout.write(finalOutput);
-            }
-          },
-          onError: (err: Error) => {
-            failed = true;
-            console.log('');
-            console.log(`  ${red}error${x}  ${err.message}`);
-          },
-        },
-      );
-      if (!rawOutput && result.output) {
-        rawOutput = result.output;
-        if (!raw) process.stdout.write(rawOutput);
-      }
-    } catch (err: unknown) {
-      failed = true;
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log('');
-      console.log(`  ${red}dispatch error${x}  ${msg}`);
-    }
-
-    try { await plugin.shutdown(); } catch { /* ignore */ }
+    const { output, failed } = await dispatchToPlugin({
+      command: 'todo',
+      prompt,
+      cwd,
+      noContext,
+      raw,
+      onReady: (pluginName) => {
+        if (!raw) {
+          console.log(`  ${col}${entry.type}${x}  ${dim}#${entry.index}  ${entry.file}:${entry.line}${x}`);
+          if (entry.content) console.log(`  ${dim}${entry.content}${x}`);
+          console.log(`  ${DASH}`);
+          console.log('');
+          process.stdout.write(`  ${dim}resolving…${x}\n\n  `);
+        }
+      },
+      onToken: (token) => {
+        process.stdout.write(token);
+      },
+    });
 
     console.log('');
     if (!raw) {
@@ -709,80 +649,41 @@ export async function handleTodoCommand(argv: string[]): Promise<void> {
       process.exit(0);
     }
 
-    const { plugin, name: pluginName } = await loadActivePlugin();
-
-    if (!raw) {
-      renderSummaryLine(entries);
-      console.log('');
-      process.stdout.write(`  ${dim}analysing ${entries.length} items…${x}`);
-    }
-
-    const available = await plugin.isAvailable();
-    if (!available) {
-      if (!raw) process.stdout.write('\r                              \r');
-      console.log(`  ${red}plugin not available${x}  ${dim}${pluginName}${x}`);
-      try { await plugin.shutdown(); } catch { /* ignore */ }
-      process.exit(1);
-    }
-
-    const analyzeConvId = `todo-analyze-${Date.now()}`;
-    const context = await buildCommandContext('analyse technical debt', analyzeConvId, cwd, noContext);
-
-    let rawOutput = '';
-    let failed = false;
-
-    try {
-      const result = await plugin.dispatch(
-        prompt,
-        context,
-        {
-          conversationId: analyzeConvId,
-          workingDirectory: cwd,
-        },
-        {
-          onToken: (token: string) => { rawOutput += token; },
-          onToolCall: () => { /* no-op */ },
-          onToolResult: () => { /* no-op */ },
-          onDone: (finalOutput: string) => {
-            if (!rawOutput && finalOutput) rawOutput = finalOutput;
-          },
-          onError: (err: Error) => {
-            failed = true;
-            if (!raw) process.stdout.write('\r                              \r');
-            console.log(`  ${red}error${x}  ${err.message}`);
-          },
-        },
-      );
-      if (!rawOutput && result.output) rawOutput = result.output;
-    } catch (err: unknown) {
-      failed = true;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!raw) process.stdout.write('\r                              \r');
-      console.log(`  ${red}dispatch error${x}  ${msg}`);
-    }
-
-    try { await plugin.shutdown(); } catch { /* ignore */ }
+    const { output, failed } = await dispatchToPlugin({
+      command: 'todo',
+      prompt,
+      cwd,
+      noContext,
+      raw,
+      onReady: (_pluginName) => {
+        if (!raw) {
+          renderSummaryLine(entries);
+          console.log('');
+          process.stdout.write(`  ${dim}analysing ${entries.length} items…${x}`);
+        }
+      },
+    });
 
     if (!raw) process.stdout.write('\r                              \r');
 
-    if (failed || !rawOutput?.trim()) {
+    if (failed || !output?.trim()) {
       console.log(`  ${red}✗${x}  ${dim}analysis failed${x}`);
       console.log('');
       process.exit(1);
     }
 
     if (raw) {
-      console.log(rawOutput);
+      console.log(output);
       process.exit(0);
     }
 
-    const parsed = parseAnalyzeOutput(rawOutput);
+    const parsed = parseAnalyzeOutput(output);
     if (parsed) {
       renderAnalyzeResult(parsed);
     } else {
       // Fallback: just print raw output
       console.log('');
-      console.log(rawOutput);
+      console.log(output);
       console.log('');
     }
 

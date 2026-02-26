@@ -25,13 +25,11 @@
  *   --message-only    Print just the raw commit message, then exit (implies --yes)
  */
 
-import { execFileSync } from 'child_process';
 import * as readline from 'readline';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
-
-/** Maximum number of diff characters sent to the plugin to stay within context limits. */
-const MAX_DIFF_CHARS = 14_000;
+import { dispatchToPlugin } from './dispatch.js';
+import { git, gitSafe, isGitRepo, parseDiffStats, type DiffStats } from './parse-utils.js';
+import { MAX_DIFF_CHARS_COMMIT as MAX_DIFF_CHARS } from './config-constants.js';
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
 
@@ -84,33 +82,6 @@ export function parseCommitArgs(argv: string[]): CommitArgs {
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
 
-/**
- * Run a git command in the given directory, return stdout string.
- * Throws on non-zero exit.
- * Exported for testing.
- */
-export function git(cwd: string, args: string[]): string {
-  return execFileSync('git', ['-C', cwd, ...args], {
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 30_000,
-  }).trim();
-}
-
-/** Run a git command; return null on failure instead of throwing. */
-export function gitSafe(cwd: string, args: string[]): string | null {
-  try {
-    return git(cwd, args);
-  } catch {
-    return null;
-  }
-}
-
-/** Return true if cwd is inside a git work-tree. */
-export function isGitRepo(cwd: string): boolean {
-  return gitSafe(cwd, ['rev-parse', '--is-inside-work-tree']) === 'true';
-}
-
 /** Return the staged diff, or empty string when nothing is staged. */
 export function getStagedDiff(cwd: string): string {
   return gitSafe(cwd, ['diff', '--cached']) ?? '';
@@ -129,24 +100,6 @@ export function getRecentLog(cwd: string, n = 8): string {
 /** Short status of staged files. */
 export function getStagedStatus(cwd: string): string {
   return gitSafe(cwd, ['status', '--short']) ?? '';
-}
-
-// ── Diff stats ────────────────────────────────────────────────────────────────
-
-export interface DiffStats {
-  added: number;
-  removed: number;
-  files: number;
-}
-
-/** Count +/- lines and files changed in a diff string. */
-export function parseDiffStats(diff: string): DiffStats {
-  const lines = diff.split('\n');
-  return {
-    added: lines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
-    removed: lines.filter(l => l.startsWith('-') && !l.startsWith('---')).length,
-    files: lines.filter(l => l.startsWith('diff --git')).length,
-  };
 }
 
 // ── Prompt building ───────────────────────────────────────────────────────────
@@ -297,87 +250,38 @@ export async function handleCommitCommand(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  // ── Load plugin ───────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
-  if (!messageOnly) {
-    const stats = parseDiffStats(diff);
-    console.log('');
-    console.log(`  ${bold}commit${x}  ${dim}${activePluginName}${x}  ${dim}${cwd}${x}`);
-    console.log(`  ${DASH}`);
-    console.log(
-      `  ${gray}diff${x}     ${dim}··${x}  ${green}+${stats.added}${x}  ${red}-${stats.removed}${x}  ` +
-      `${dim}across ${stats.files} file${stats.files !== 1 ? 's' : ''}${x}`,
-    );
-    if (noContext) console.log(`  ${gray}context${x}  ${dim}··${x}  ${dim}disabled${x}`);
-    console.log(`  ${DASH}`);
-    console.log('');
-    process.stdout.write(`  ${dim}generating message…${x}`);
-  }
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    if (!messageOnly) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-      console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-      console.log('');
-    }
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ─────────────────────────────────────────────────────────
-  const commitConvId = `commit-${Date.now()}`;
-  const context = await buildCommandContext('generate commit message', commitConvId, cwd, noContext);
-
   // ── Build prompt ──────────────────────────────────────────────────────────
   const status = getStagedStatus(cwd);
   const recentLog = getRecentLog(cwd);
   const prompt = buildCommitPrompt({ diff, status, recentLog });
 
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId: commitConvId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* commit message gen shouldn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          if (!messageOnly) {
-            process.stdout.write('\r                              \r');
-            console.log(`  ${red}error${x}  ${err.message}`);
-          }
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!messageOnly) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${red}dispatch error${x}  ${msg}`);
-    }
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+  const { output: rawOutput, failed } = await dispatchToPlugin({
+    command: 'commit',
+    prompt,
+    cwd,
+    noContext,
+    raw: messageOnly,
+    onReady: (pluginName) => {
+      if (!messageOnly) {
+        const stats = parseDiffStats(diff);
+        console.log('');
+        console.log(`  ${bold}commit${x}  ${dim}${pluginName}${x}  ${dim}${cwd}${x}`);
+        console.log(`  ${DASH}`);
+        console.log(
+          `  ${gray}diff${x}     ${dim}··${x}  ${green}+${stats.added}${x}  ${red}-${stats.removed}${x}  ` +
+          `${dim}across ${stats.files} file${stats.files !== 1 ? 's' : ''}${x}`,
+        );
+        if (noContext) console.log(`  ${gray}context${x}  ${dim}··${x}  ${dim}disabled${x}`);
+        console.log(`  ${DASH}`);
+        console.log('');
+        process.stdout.write(`  ${dim}generating message…${x}`);
+      }
+    },
+  });
 
   if (failed || !rawOutput.trim()) {
     if (!messageOnly) {
+      process.stdout.write('\r                              \r');
       console.log('');
       console.log(`  ${red}✗${x}  ${dim}failed to generate commit message${x}`);
       console.log('');

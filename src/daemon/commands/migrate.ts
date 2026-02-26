@@ -50,18 +50,16 @@ import {
 } from 'fs';
 import { join, relative, isAbsolute, basename, extname } from 'path';
 import { execFileSync } from 'child_process';
-import { randomBytes } from 'crypto';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
 
+import {
+  MAX_SOURCE_CHARS_STANDARD as MAX_SOURCE_CHARS,
+  MAX_DIFF_CHARS_SMALL as MAX_DIFF_CHARS,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Max chars read from a single source file. */
-const MAX_SOURCE_CHARS = 14_000;
-
-/** Max chars of diff to display per file in the terminal. */
-const MAX_DIFF_CHARS = 3_000;
 
 /** Default maximum number of files to process (safety limit). */
 const DEFAULT_MAX_FILES = 15;
@@ -411,9 +409,8 @@ async function processFile(
   filePath: string,
   args: MigrateArgs,
   projectName: string | undefined,
-  conversationId: string,
 ): Promise<{ output: string; status: 'migrated' | 'no-change' | 'failed'; backupPath?: string }> {
-  const { cwd, goal, write, backup, noContext } = args;
+  const { cwd, goal, write, backup, raw, noContext } = args;
 
   const sourceContent = readSourceForMigrate(filePath);
   if (!sourceContent.trim()) {
@@ -423,67 +420,38 @@ async function processFile(
   const sourceRelPath = relative(cwd, filePath) || basename(filePath);
   const prompt = buildMigratePrompt({ goal, sourceContent, sourceRelPath, write, projectName });
 
-  const { plugin } = await loadActivePlugin();
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
+  const { output, failed } = await dispatchToPlugin({
+    command: 'migrate',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    onToken: (token: string) => {
+      process.stdout.write(token);
+    },
+  });
 
-  let fullOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          fullOutput += token;
-          process.stdout.write(token);
-        },
-        onToolCall: (_name: string) => { /* migration is read-only from AI perspective */ },
-        onToolResult: (_name: string, _res: string) => { /* no-op */ },
-        onDone: (_final: string) => { /* collected via onToken */ },
-        onError: (err: Error) => {
-          failed = true;
-          process.stderr.write(`\nmigrate error: ${err.message}\n`);
-        },
-      },
-    );
-
-    if (!fullOutput && result.output) {
-      fullOutput = result.output;
-      process.stdout.write(result.output);
-    }
-    if (fullOutput && !fullOutput.endsWith('\n')) {
-      process.stdout.write('\n');
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`\nmigrate dispatch error: ${msg}\n`);
+  if (output && !output.endsWith('\n')) {
+    process.stdout.write('\n');
   }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
 
   if (failed) {
-    return { output: fullOutput, status: 'failed' };
+    return { output, status: 'failed' };
   }
 
-  const code = extractMigratedCode(fullOutput);
+  const code = extractMigratedCode(output);
 
   // AI said this file doesn't need the migration
   if (code === null) {
-    return { output: fullOutput, status: 'no-change' };
+    return { output, status: 'no-change' };
   }
 
   if (write && code) {
     const backupPath = applyMigration(filePath, code, backup) ?? undefined;
-    return { output: fullOutput, status: 'migrated', backupPath };
+    return { output, status: 'migrated', backupPath };
   }
 
-  return { output: fullOutput, status: code ? 'migrated' : 'failed' };
+  return { output, status: code ? 'migrated' : 'failed' };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -616,12 +584,10 @@ export async function handleMigrateCommand(argv: string[]): Promise<void> {
   // ── Process each file ──────────────────────────────────────────────────────
 
   const results: MigrateFileResult[] = [];
-  const conversationIdBase = `migrate-${randomBytes(4).toString('hex')}`;
 
   for (let i = 0; i < targetFiles.length; i++) {
     const filePath = targetFiles[i];
     const relPath = relative(cwd, filePath) || basename(filePath);
-    const conversationId = `${conversationIdBase}-${i}`;
 
     if (!raw) {
       console.log(DASH);
@@ -634,7 +600,7 @@ export async function handleMigrateCommand(argv: string[]): Promise<void> {
     let errorMessage: string | undefined;
 
     try {
-      const res = await processFile(filePath, args, projectName, conversationId);
+      const res = await processFile(filePath, args, projectName);
       status = res.status;
       backupPath = res.backupPath;
 

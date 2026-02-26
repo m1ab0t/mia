@@ -20,7 +20,8 @@
  */
 
 import { x, bold, dim, red, green, cyan, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { readStdinContent } from './parse-utils.js';
 
 // ── Argument parsing ────────────────────────────────────────────────────────
 
@@ -78,23 +79,6 @@ export function buildAskPrompt(parts: string[], stdinContent: string): string {
   return cliPrompt;
 }
 
-// ── Stdin reader ────────────────────────────────────────────────────────────
-
-/**
- * Read all of stdin to a string.  Resolves immediately if stdin is a TTY
- * (interactive terminal) — in that case nothing is piped in and we return ''.
- */
-export function readStdinContent(): Promise<string> {
-  if (process.stdin.isTTY) return Promise.resolve('');
-
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
-
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 export async function handleAskCommand(argv: string[]): Promise<void> {
@@ -127,120 +111,61 @@ export async function handleAskCommand(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  // Load active plugin
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
-  if (!rawMode) {
-    console.log('');
-    console.log(`  ${bold}ask${x}  ${dim}${activePluginName}${x}  ${dim}${cwd}${x}`);
-    console.log(`  ${DASH}`);
-    const promptPreview = prompt.length > 80 ? prompt.slice(0, 80) + '…' : prompt;
-    // Only show prompt preview if it differs from the raw prompt (stdin expanded)
-    if (stdinContent && promptParts.length > 0) {
-      console.log(`  ${gray}stdin${x}   ${dim}··${x} ${dim}${stdinContent.length} chars${x}`);
-      console.log(`  ${gray}prompt${x}  ${dim}··${x} ${dim}${promptParts.join(' ').slice(0, 60)}${x}`);
-    } else {
-      console.log(`  ${gray}prompt${x}  ${dim}··${x} ${dim}${promptPreview}${x}`);
-    }
-    if (noContext) console.log(`  ${gray}context${x} ${dim}··${x} ${dim}disabled${x}`);
-    console.log(`  ${DASH}`);
-    console.log('');
-  }
-
-  // Build context (skip heavy gathering when --no-context is set)
-  const conversationId = `ask-${Date.now()}`;
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    if (!rawMode) {
-      console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-      console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-      console.log('');
-    } else {
-      process.stderr.write(`mia ask: plugin '${activePluginName}' is not available\n`);
-    }
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // Dispatch — stream tokens directly to stdout
-  const started = Date.now();
-  let failed = false;
   let firstToken = true;
 
-  if (!rawMode) process.stdout.write('  ');
+  const { output, failed, elapsed } = await dispatchToPlugin({
+    command: 'ask',
+    prompt,
+    cwd,
+    noContext,
+    raw: rawMode,
+    onReady: (pluginName) => {
+      if (!rawMode) {
+        console.log('');
+        console.log(`  ${bold}ask${x}  ${dim}${pluginName}${x}  ${dim}${cwd}${x}`);
+        console.log(`  ${DASH}`);
+        const promptPreview = prompt.length > 80 ? prompt.slice(0, 80) + '…' : prompt;
+        if (stdinContent && promptParts.length > 0) {
+          console.log(`  ${gray}stdin${x}   ${dim}··${x} ${dim}${stdinContent.length} chars${x}`);
+          console.log(`  ${gray}prompt${x}  ${dim}··${x} ${dim}${promptParts.join(' ').slice(0, 60)}${x}`);
+        } else {
+          console.log(`  ${gray}prompt${x}  ${dim}··${x} ${dim}${promptPreview}${x}`);
+        }
+        if (noContext) console.log(`  ${gray}context${x} ${dim}··${x} ${dim}disabled${x}`);
+        console.log(`  ${DASH}`);
+        console.log('');
+        process.stdout.write('  ');
+      }
+    },
+    onToken: (token) => {
+      firstToken = false;
+      process.stdout.write(token);
+    },
+    onToolCall: (toolName) => {
+      if (!rawMode) {
+        console.log('');
+        console.log(`  ${dim}→ ${toolName}${x}`);
+        process.stdout.write('  ');
+        firstToken = true;
+      }
+    },
+  });
 
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          if (firstToken && !rawMode) {
-            // Leading indent already written before the loop
-          }
-          firstToken = false;
-          process.stdout.write(token);
-        },
-        onToolCall: (toolName: string) => {
-          if (!rawMode) {
-            // Print tool call inline so user knows what's happening
-            console.log('');
-            console.log(`  ${dim}→ ${toolName}${x}`);
-            process.stdout.write('  ');
-            firstToken = true; // reset so next response block gets proper indent
-          }
-        },
-        onToolResult: (_name: string, _result: string) => {
-          // Results shown implicitly through streaming — no extra output
-        },
-        onDone: (_finalOutput: string) => {
-          // Already streamed — nothing to do
-        },
-        onError: (err: Error) => {
-          failed = true;
-          if (!rawMode) {
-            console.error('');
-            console.error(`  ${red}error${x}  ${err.message}`);
-          } else {
-            process.stderr.write(`mia ask: error: ${err.message}\n`);
-          }
-        },
-      },
-    );
-
-    // If the plugin didn't stream anything, fall back to batch output
-    if (firstToken && result.output) {
-      process.stdout.write(result.output);
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!rawMode) {
-      console.error('');
-      console.error(`  ${red}dispatch error${x}  ${msg}`);
-    } else {
-      process.stderr.write(`mia ask: dispatch error: ${msg}\n`);
-    }
+  // If nothing was streamed, fall back to batch output
+  if (firstToken && output) {
+    process.stdout.write(output);
   }
 
-  const elapsed = ((Date.now() - started) / 1000).toFixed(1);
+  const elapsedStr = elapsed.toFixed(1);
 
   if (!rawMode) {
     console.log('');
     console.log('');
-    console.log(`  ${failed ? red : green}${failed ? '✗' : '✓'}${x}  ${dim}${elapsed}s${x}`);
+    console.log(`  ${failed ? red : green}${failed ? '✗' : '✓'}${x}  ${dim}${elapsedStr}s${x}`);
     console.log('');
   } else {
-    // Ensure output ends with a newline for clean piping
     process.stdout.write('\n');
   }
 
-  try { await plugin.shutdown(); } catch { /* ignore */ }
   process.exit(failed ? 1 : 0);
 }

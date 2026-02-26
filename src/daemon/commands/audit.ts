@@ -30,9 +30,8 @@
 import { execFileSync } from 'child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, extname } from 'path';
-import { randomBytes } from 'crypto';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -728,75 +727,35 @@ export async function handleAuditCommand(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── Header (non-raw, non-json) ─────────────────────────────────────────────
-  if (!raw && !json) {
-    renderAuditHeader(data, args);
-  }
-
   // ── AI dispatch ────────────────────────────────────────────────────────────
-  const { plugin } = await loadActivePlugin();
-  const conversationId = `audit-${randomBytes(4).toString('hex')}`;
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
-
-  let fullOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          fullOutput += token;
-          if (!json) {
-            process.stdout.write(token);
-          }
-        },
-        onToolCall: (_toolName: string) => { /* audit is read-only */ },
-        onToolResult: (_name: string, _result: string) => { /* no-op */ },
-        onDone: (_finalOutput: string) => { /* collected via onToken */ },
-        onError: (err: Error) => {
-          failed = true;
-          if (!raw && !json) {
-            console.error(`\n  ${red}error${x}  ${err.message}`);
-          } else {
-            process.stderr.write(`mia audit: error: ${err.message}\n`);
-          }
-        },
-      },
-    );
-
-    if (!fullOutput && result.output) {
-      fullOutput = result.output;
-      if (!json) {
-        process.stdout.write(result.output);
+  const { output, failed } = await dispatchToPlugin({
+    command: 'audit',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    onReady: (_pluginName) => {
+      // Header (non-raw, non-json)
+      if (!raw && !json) {
+        renderAuditHeader(data, args);
       }
-    }
+    },
+    onToken: (token) => {
+      if (!json) {
+        process.stdout.write(token);
+      }
+    },
+  });
 
-    if (fullOutput && !fullOutput.endsWith('\n') && !json) {
-      process.stdout.write('\n');
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!raw && !json) {
-      console.error(`\n  ${red}dispatch error${x}  ${msg}`);
-    } else {
-      process.stderr.write(`mia audit: dispatch error: ${msg}\n`);
-    }
+  if (output && !output.endsWith('\n') && !json) {
+    process.stdout.write('\n');
   }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
 
   if (failed) process.exit(1);
 
   // ── JSON output mode ───────────────────────────────────────────────────────
   if (json) {
-    renderAuditJson(data, fullOutput);
+    renderAuditJson(data, output);
   }
 
   // ── Exit code based on severity ────────────────────────────────────────────

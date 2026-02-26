@@ -32,12 +32,8 @@
 import { execFileSync } from 'child_process';
 import * as readline from 'readline';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
-
-/** Max diff characters sent to the plugin. */
-const MAX_DIFF_CHARS = 16_000;
-/** Max commit log characters sent to the plugin. */
-const MAX_LOG_CHARS = 3_000;
+import { dispatchToPlugin } from './dispatch.js';
+import { MAX_DIFF_CHARS, MAX_LOG_CHARS_PR as MAX_LOG_CHARS } from './config-constants.js';
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
 
@@ -432,88 +428,41 @@ export async function handlePrCommand(argv: string[]): Promise<void> {
 
   const commitCount = commits ? commits.split('\n').filter(Boolean).length : 0;
 
-  // ── Load plugin ───────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
-  if (!titleOnly) {
-    const stats = parseDiffStats(diff);
-    console.log('');
-    console.log(`  ${bold}pr${x}  ${dim}${activePluginName}${x}  ${dim}${branch} → ${base}${x}`);
-    console.log(`  ${DASH}`);
-    console.log(
-      `  ${gray}commits${x}  ${dim}··${x}  ${dim}${commitCount} commit${commitCount !== 1 ? 's' : ''}${x}`,
-    );
-    console.log(
-      `  ${gray}diff${x}     ${dim}··${x}  ${green}+${stats.added}${x}  ${red}-${stats.removed}${x}  ` +
-      `${dim}across ${stats.files} file${stats.files !== 1 ? 's' : ''}${x}`,
-    );
-    if (draft) console.log(`  ${gray}mode${x}     ${dim}··${x}  ${yellow}draft${x}`);
-    if (noContext) console.log(`  ${gray}context${x}  ${dim}··${x}  ${dim}disabled${x}`);
-    console.log(`  ${DASH}`);
-    console.log('');
-    process.stdout.write(`  ${dim}generating PR…${x}`);
-  }
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    if (!titleOnly) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-      console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-      console.log('');
-    }
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ─────────────────────────────────────────────────────────
-  const prConvId = `pr-${Date.now()}`;
-  const context = await buildCommandContext('generate pull request description', prConvId, cwd, noContext);
-
   // ── Build prompt ──────────────────────────────────────────────────────────
   const prompt = buildPrPrompt({ branch, base, commits, diff, diffStat });
 
-  let rawOutput = '';
-  let failed = false;
+  // ── Dispatch to plugin ────────────────────────────────────────────────────
+  const { output, failed } = await dispatchToPlugin({
+    command: 'pr',
+    prompt,
+    cwd,
+    noContext,
+    raw: titleOnly,
+    onReady: (pluginName) => {
+      if (!titleOnly) {
+        const stats = parseDiffStats(diff);
+        console.log('');
+        console.log(`  ${bold}pr${x}  ${dim}${pluginName}${x}  ${dim}${branch} → ${base}${x}`);
+        console.log(`  ${DASH}`);
+        console.log(
+          `  ${gray}commits${x}  ${dim}··${x}  ${dim}${commitCount} commit${commitCount !== 1 ? 's' : ''}${x}`,
+        );
+        console.log(
+          `  ${gray}diff${x}     ${dim}··${x}  ${green}+${stats.added}${x}  ${red}-${stats.removed}${x}  ` +
+          `${dim}across ${stats.files} file${stats.files !== 1 ? 's' : ''}${x}`,
+        );
+        if (draft) console.log(`  ${gray}mode${x}     ${dim}··${x}  ${yellow}draft${x}`);
+        if (noContext) console.log(`  ${gray}context${x}  ${dim}··${x}  ${dim}disabled${x}`);
+        console.log(`  ${DASH}`);
+        console.log('');
+        process.stdout.write(`  ${dim}generating PR…${x}`);
+      }
+    },
+  });
 
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId: prConvId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* PR generation shouldn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          if (!titleOnly) {
-            process.stdout.write('\r                              \r');
-            console.log(`  ${red}error${x}  ${err.message}`);
-          }
-        },
-      },
-    );
+  process.stdout.write('\r                              \r');
 
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!titleOnly) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${red}dispatch error${x}  ${msg}`);
-    }
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
-
-  if (failed || !rawOutput.trim()) {
+  if (failed || !output.trim()) {
     if (!titleOnly) {
       console.log('');
       console.log(`  ${red}✗${x}  ${dim}failed to generate PR content${x}`);
@@ -523,15 +472,14 @@ export async function handlePrCommand(argv: string[]): Promise<void> {
   }
 
   // ── Parse the generated PR ────────────────────────────────────────────────
-  const prContent = extractPrContent(rawOutput);
+  const prContent = extractPrContent(output);
   if (!prContent || !prContent.title) {
     if (!titleOnly) {
-      process.stdout.write('\r                              \r');
       console.log('');
       console.log(`  ${red}✗${x}  ${dim}could not extract PR title from response${x}`);
       console.log('');
       console.log(`  ${dim}raw output:${x}`);
-      console.log(rawOutput.slice(0, 500));
+      console.log(output.slice(0, 500));
       console.log('');
     }
     process.exit(1);

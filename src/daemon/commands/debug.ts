@@ -34,7 +34,8 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, isAbsolute, extname } from 'path';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
+import { readStdinContent } from './parse-utils.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -458,19 +459,6 @@ export function renderDebug(content: DebugContent): string {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/**
- * Read all of stdin to a string.  Resolves immediately if stdin is a TTY.
- */
-function readStdinContent(): Promise<string> {
-  if (process.stdin.isTTY) return Promise.resolve('');
-  return new Promise((resolve) => {
-    const chunks: Buffer[] = [];
-    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    process.stdin.on('error', () => resolve(''));
-  });
-}
-
 export async function handleDebugCommand(argv: string[]): Promise<void> {
   const { cwd, errorParts, file, depth, dryRun, raw, noContext } = parseDebugArgs(argv);
 
@@ -556,33 +544,6 @@ export async function handleDebugCommand(argv: string[]): Promise<void> {
 
   const category = classifyError(errorText);
 
-  if (!raw) {
-    const { loadActivePlugin: _lap } = await import('./plugin-loader.js');
-    const { name: pluginName } = await _lap();
-    console.log('');
-    console.log(`  ${bold}debug${x}  ${dim}${pluginName}${x}  ${dim}${cwd}${x}`);
-    console.log(`  ${DASH}`);
-    const errorPreview = errorText.length > 80 ? errorText.slice(0, 80).replace(/\n/g, ' ') + '…' : errorText.replace(/\n/g, ' ');
-    console.log(`  ${gray}error${x}   ${dim}··${x} ${dim}${errorPreview}${x}`);
-    if (category !== 'unknown') {
-      console.log(`  ${gray}type${x}    ${dim}··${x} ${dim}${category.replace(/_/g, ' ')}${x}`);
-    }
-    if (refs.length > 0) {
-      const refDisplay = refs.map(r => {
-        let p = r.file.startsWith(cwd + '/') ? r.file.slice(cwd.length + 1) : r.file;
-        return `${p}:${r.line}`;
-      }).join(', ');
-      console.log(`  ${gray}refs${x}    ${dim}··${x} ${dim}${refDisplay}${x}`);
-    }
-    console.log(`  ${gray}depth${x}   ${dim}··${x} ${dim}${depth}${x}`);
-    if (snippets.length === 0) {
-      console.log(`  ${yellow}no code refs found — analysis based on error text only${x}`);
-    }
-    if (noContext) console.log(`  ${gray}context${x} ${dim}··${x} ${dim}disabled${x}`);
-    console.log(`  ${DASH}`);
-    console.log('');
-  }
-
   // Build the prompt
   const prompt = buildDebugPrompt(errorText, snippets, category, depth, cwd);
 
@@ -596,98 +557,63 @@ export async function handleDebugCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  const conversationId = `debug-${Date.now()}`;
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
+  const { output, failed, elapsed } = await dispatchToPlugin({
+    command: 'debug',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    // In raw mode, stream tokens directly to stdout
+    onToken: raw ? (token) => process.stdout.write(token) : undefined,
+    onReady: (pluginName) => {
+      if (!raw) {
+        console.log('');
+        console.log(`  ${bold}debug${x}  ${dim}${pluginName}${x}  ${dim}${cwd}${x}`);
+        console.log(`  ${DASH}`);
+        const errorPreview = errorText.length > 80 ? errorText.slice(0, 80).replace(/\n/g, ' ') + '…' : errorText.replace(/\n/g, ' ');
+        console.log(`  ${gray}error${x}   ${dim}··${x} ${dim}${errorPreview}${x}`);
+        if (category !== 'unknown') {
+          console.log(`  ${gray}type${x}    ${dim}··${x} ${dim}${category.replace(/_/g, ' ')}${x}`);
+        }
+        if (refs.length > 0) {
+          const refDisplay = refs.map(r => {
+            const p = r.file.startsWith(cwd + '/') ? r.file.slice(cwd.length + 1) : r.file;
+            return `${p}:${r.line}`;
+          }).join(', ');
+          console.log(`  ${gray}refs${x}    ${dim}··${x} ${dim}${refDisplay}${x}`);
+        }
+        console.log(`  ${gray}depth${x}   ${dim}··${x} ${dim}${depth}${x}`);
+        if (snippets.length === 0) {
+          console.log(`  ${yellow}no code refs found — analysis based on error text only${x}`);
+        }
+        if (noContext) console.log(`  ${gray}context${x} ${dim}··${x} ${dim}disabled${x}`);
+        console.log(`  ${DASH}`);
+        console.log('');
+      }
+    },
+  });
 
-  const { plugin, name: activePluginName } = await loadActivePlugin();
+  const elapsedStr = elapsed.toFixed(1);
 
-  const available = await plugin.isAvailable();
-  if (!available) {
-    if (!raw) {
-      console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-      console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-      console.log('');
-    } else {
-      process.stderr.write(`mia debug: plugin '${activePluginName}' is not available\n`);
-    }
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  const started = Date.now();
-  let failed = false;
-  let fullOutput = '';
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          fullOutput += token;
-          // Don't stream raw JSON tokens — collect and render structured
-          if (raw) {
-            process.stdout.write(token);
-          }
-        },
-        onToolCall: (_toolName: string) => {
-          // Debug doesn't invoke tools directly
-        },
-        onToolResult: (_name: string, _result: string) => {},
-        onDone: (_finalOutput: string) => {},
-        onError: (err: Error) => {
-          failed = true;
-          if (!raw) {
-            console.error(`  ${red}error${x}  ${err.message}`);
-          } else {
-            process.stderr.write(`mia debug: error: ${err.message}\n`);
-          }
-        },
-      },
-    );
-
-    if (!fullOutput && result.output) {
-      fullOutput = result.output;
-      if (raw) process.stdout.write(result.output);
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!raw) {
-      console.error(`  ${red}dispatch error${x}  ${msg}`);
-    } else {
-      process.stderr.write(`mia debug: dispatch error: ${msg}\n`);
-    }
-  }
-
-  const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-
-  if (!raw && !failed && fullOutput) {
-    const content = parseDebugOutput(fullOutput);
+  if (!raw && !failed && output) {
+    const content = parseDebugOutput(output);
 
     if (content.rootCause || content.fix) {
-      // Structured render
       console.log(renderDebug(content));
     } else {
-      // Fallback: raw output (model didn't return JSON)
-      console.log(fullOutput);
+      console.log(output);
       console.log('');
     }
 
-    console.log(`  ${failed ? red : green}${failed ? '✗' : '✓'}${x}  ${dim}${elapsed}s${x}`);
+    console.log(`  ${failed ? red : green}${failed ? '✗' : '✓'}${x}  ${dim}${elapsedStr}s${x}`);
     console.log('');
   } else if (!raw) {
     console.log('');
-    console.log(`  ${failed ? red : green}${failed ? '✗' : '✓'}${x}  ${dim}${elapsed}s${x}`);
+    console.log(`  ${failed ? red : green}${failed ? '✗' : '✓'}${x}  ${dim}${elapsedStr}s${x}`);
     console.log('');
   } else {
     process.stdout.write('\n');
   }
 
-  try { await plugin.shutdown(); } catch { /* ignore */ }
   process.exit(failed ? 1 : 0);
 }

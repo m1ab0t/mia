@@ -23,7 +23,7 @@
 import { execFileSync } from 'child_process';
 import { readdirSync, statSync } from 'fs';
 import { join, relative } from 'path';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // ANSI helpers (module-level so handleSearchCommand can use them too)
@@ -417,86 +417,30 @@ export async function handleSearchCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // ── Load plugin ───────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
-  if (!args.filesOnly) {
-    console.log();
-    console.log(`  ${D}search${R}  ${D}${activePluginName}${R}  ${D}"${query}"${R}`);
-    const patternNote = args.pattern ? ` · pattern: ${args.pattern}` : '';
-    console.log(`  ${D}${fileCount} file${fileCount !== 1 ? 's' : ''} indexed${patternNote}${R}`);
-    console.log();
-    process.stdout.write(`  ${D}searching…${R}`);
-  }
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    if (!args.filesOnly) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${RED}plugin not available${R}  ${D}${activePluginName}${R}`);
-      console.log(
-        `  ${D}run${R} ${C}mia plugin info ${activePluginName}${R} ${D}for install instructions${R}`,
-      );
-      console.log();
-    }
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ─────────────────────────────────────────────────────────
-  const searchConvId = `search-${Date.now()}`;
-  const pluginContext = await buildCommandContext(
-    `search codebase for: ${query}`,
-    searchConvId,
+  // ── Dispatch to plugin ──────────────────────────────────────────────────
+  const { output, failed } = await dispatchToPlugin({
+    command: 'search',
+    prompt,
     cwd,
-    args.noContext,
-  );
-
-  let rawOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      pluginContext,
-      {
-        conversationId: searchConvId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* search gen shouldn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          if (!args.filesOnly) {
-            process.stdout.write('\r                              \r');
-            console.log(`  ${RED}error${R}  ${err.message}`);
-          }
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!args.filesOnly) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${RED}dispatch error${R}  ${msg}`);
-    }
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+    noContext: args.noContext,
+    raw: args.filesOnly,
+    onReady: (pluginName) => {
+      if (!args.filesOnly) {
+        console.log();
+        console.log(`  ${D}search${R}  ${D}${pluginName}${R}  ${D}"${query}"${R}`);
+        const patternNote = args.pattern ? ` · pattern: ${args.pattern}` : '';
+        console.log(`  ${D}${fileCount} file${fileCount !== 1 ? 's' : ''} indexed${patternNote}${R}`);
+        console.log();
+        process.stdout.write(`  ${D}searching…${R}`);
+      }
+    },
+  });
 
   if (!args.filesOnly) {
     process.stdout.write('\r                              \r');
   }
 
-  if (failed || !rawOutput) {
+  if (failed || !output) {
     if (!args.filesOnly) {
       console.log(`  ${RED}error${R} ${D}plugin returned no output${R}`);
     }
@@ -504,13 +448,13 @@ export async function handleSearchCommand(argv: string[]): Promise<void> {
   }
 
   if (args.raw) {
-    renderRawSearch(rawOutput);
+    renderRawSearch(output);
     process.exit(0);
   }
 
-  const content = parseSearchOutput(rawOutput, query);
+  const content = parseSearchOutput(output, query);
   if (!content) {
-    renderRawSearch(rawOutput);
+    renderRawSearch(output);
     process.exit(0);
   }
 

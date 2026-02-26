@@ -38,18 +38,16 @@ import {
 } from 'fs';
 import { join, relative, isAbsolute, basename, extname } from 'path';
 import { execFileSync } from 'child_process';
-import { randomBytes } from 'crypto';
 import { x, bold, dim, cyan, green, red, yellow, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 import { readFileTruncated } from '../../utils/fs-utils.js';
 
+import {
+  MAX_SOURCE_CHARS,
+  MAX_DIFF_CHARS_DISPLAY as MAX_DIFF_CHARS,
+} from './config-constants.js';
+
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-/** Max chars read from the target source file. */
-const MAX_SOURCE_CHARS = 16_000;
-
-/** Max chars of diff to surface in the terminal. */
-const MAX_DIFF_CHARS = 4_000;
 
 /** Source file extensions we accept. */
 const SOURCE_EXTS = new Set([
@@ -385,74 +383,33 @@ export async function handleRefactorCommand(argv: string[]): Promise<void> {
     return;
   }
 
-  // ── Header ────────────────────────────────────────────────────────────────
-
-  if (!raw) {
-    const effectiveGoal = goal || 'general improvements';
-    console.log(DASH);
-    console.log(`${bold}refactor${x} ${dim}·${x} ${cyan}${sourceRelPath}${x}`);
-    console.log(`${dim}goal    ·${x} ${effectiveGoal}`);
-    if (write) console.log(`${dim}mode    ·${x} ${yellow}write${x} ${dim}(changes will be applied)${x}`);
-    console.log(DASH);
-    console.log();
-  }
-
   // ── Plugin dispatch ───────────────────────────────────────────────────────
 
-  const { plugin } = await loadActivePlugin();
+  const { output, failed } = await dispatchToPlugin({
+    command: 'refactor',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    onReady: () => {
+      if (!raw) {
+        const effectiveGoal = goal || 'general improvements';
+        console.log(DASH);
+        console.log(`${bold}refactor${x} ${dim}·${x} ${cyan}${sourceRelPath}${x}`);
+        console.log(`${dim}goal    ·${x} ${effectiveGoal}`);
+        if (write) console.log(`${dim}mode    ·${x} ${yellow}write${x} ${dim}(changes will be applied)${x}`);
+        console.log(DASH);
+        console.log();
+      }
+    },
+    onToken: (token: string) => {
+      process.stdout.write(token);
+    },
+  });
 
-  const conversationId = `refactor-${randomBytes(4).toString('hex')}`;
-  const context = await buildCommandContext(prompt, conversationId, cwd, noContext);
-
-  let fullOutput = '';
-  let failed = false;
-
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => {
-          fullOutput += token;
-          process.stdout.write(token);
-        },
-        onToolCall: (_toolName: string) => { /* refactor is read-only */ },
-        onToolResult: (_name: string, _result: string) => { /* no-op */ },
-        onDone: (_finalOutput: string) => { /* collected via onToken */ },
-        onError: (err: Error) => {
-          failed = true;
-          if (!raw) {
-            console.error(`\n${red}error${x} ${dim}·${x} ${err.message}`);
-          } else {
-            process.stderr.write(`mia refactor: error: ${err.message}\n`);
-          }
-        },
-      },
-    );
-
-    if (!fullOutput && result.output) {
-      fullOutput = result.output;
-      process.stdout.write(result.output);
-    }
-
-    if (fullOutput && !fullOutput.endsWith('\n')) {
-      process.stdout.write('\n');
-    }
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!raw) {
-      console.error(`\n${red}dispatch error${x} ${dim}·${x} ${msg}`);
-    } else {
-      process.stderr.write(`mia refactor: dispatch error: ${msg}\n`);
-    }
+  if (output && !output.endsWith('\n')) {
+    process.stdout.write('\n');
   }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
 
   if (failed) {
     process.exit(1);
@@ -461,7 +418,7 @@ export async function handleRefactorCommand(argv: string[]): Promise<void> {
   // ── Write mode ────────────────────────────────────────────────────────────
 
   if (write) {
-    const code = extractRefactoredCode(fullOutput);
+    const code = extractRefactoredCode(output);
 
     if (!code) {
       if (!raw) {

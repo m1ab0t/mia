@@ -30,7 +30,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
-import { loadActivePlugin, buildCommandContext } from './plugin-loader.js';
+import { dispatchToPlugin } from './dispatch.js';
 
 const TRACES_DIR = join(homedir(), '.mia', 'traces');
 
@@ -586,92 +586,43 @@ export async function handleStandupCommand(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // ── Load plugin ───────────────────────────────────────────────────────────
-  const { plugin, name: activePluginName } = await loadActivePlugin();
-
-  if (!raw) {
-    const sinceStr = since.toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
-    const untilStr = until.toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
-    console.log('');
-    console.log(`  ${bold}standup${x}  ${dim}${activePluginName}${x}  ${dim}${sinceStr} → ${untilStr}${x}`);
-    console.log(`  ${DASH}`);
-
-    const commitTotal = repoActivities.reduce((n, r) => n + r.commits.length, 0);
-    const repoStr = repoActivities.map(r => `${cyan}${r.name}${x}`).join(`  ${dim}·${x}  `);
-    console.log(`  ${dim}repos${x}    ${dim}·${x}  ${repoStr}`);
-    console.log(`  ${dim}commits${x}  ${dim}·${x}  ${cyan}${commitTotal}${x}`);
-    if (dispatches.total > 0) {
-      console.log(`  ${dim}tasks${x}    ${dim}·${x}  ${cyan}${dispatches.total}${x} ${dim}dispatches${x}`);
-    }
-    console.log(`  ${DASH}`);
-    console.log('');
-    process.stdout.write(`  ${dim}generating standup…${x}`);
-  }
-
-  const available = await plugin.isAvailable();
-  if (!available) {
-    if (!raw) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${red}plugin not available${x}  ${dim}${activePluginName}${x}`);
-      console.log(`  ${dim}run${x} ${cyan}mia plugin info ${activePluginName}${x} ${dim}for install instructions${x}`);
-      console.log('');
-    }
-    try { await plugin.shutdown(); } catch { /* ignore */ }
-    process.exit(1);
-  }
-
-  // ── Build context ─────────────────────────────────────────────────────────
-  const standupConvId = `standup-${Date.now()}`;
-  const context = await buildCommandContext('generate standup report', standupConvId, cwd, noContext);
-
   // ── Build prompt ──────────────────────────────────────────────────────────
   const prompt = buildStandupPrompt(data);
 
-  let rawOutput = '';
-  let failed = false;
+  // ── Dispatch to plugin ────────────────────────────────────────────────────
+  const { output, failed } = await dispatchToPlugin({
+    command: 'standup',
+    prompt,
+    cwd,
+    noContext,
+    raw,
+    onReady: (pluginName) => {
+      if (!raw) {
+        const sinceStr = since.toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+        const untilStr = until.toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+        console.log('');
+        console.log(`  ${bold}standup${x}  ${dim}${pluginName}${x}  ${dim}${sinceStr} → ${untilStr}${x}`);
+        console.log(`  ${DASH}`);
 
-  try {
-    const result = await plugin.dispatch(
-      prompt,
-      context,
-      {
-        conversationId: standupConvId,
-        workingDirectory: cwd,
-      },
-      {
-        onToken: (token: string) => { rawOutput += token; },
-        onToolCall: () => { /* standup gen doesn't need tool calls */ },
-        onToolResult: () => { /* no-op */ },
-        onDone: (finalOutput: string) => {
-          if (!rawOutput && finalOutput) rawOutput = finalOutput;
-        },
-        onError: (err: Error) => {
-          failed = true;
-          if (!raw) {
-            process.stdout.write('\r                              \r');
-            console.log(`  ${red}error${x}  ${err.message}`);
-          }
-        },
-      },
-    );
-
-    if (!rawOutput && result.output) rawOutput = result.output;
-  } catch (err: unknown) {
-    failed = true;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!raw) {
-      process.stdout.write('\r                              \r');
-      console.log(`  ${red}dispatch error${x}  ${msg}`);
-    }
-  }
-
-  try { await plugin.shutdown(); } catch { /* ignore */ }
+        const commitTotal = repoActivities.reduce((n, r) => n + r.commits.length, 0);
+        const repoStr = repoActivities.map(r => `${cyan}${r.name}${x}`).join(`  ${dim}·${x}  `);
+        console.log(`  ${dim}repos${x}    ${dim}·${x}  ${repoStr}`);
+        console.log(`  ${dim}commits${x}  ${dim}·${x}  ${cyan}${commitTotal}${x}`);
+        if (dispatches.total > 0) {
+          console.log(`  ${dim}tasks${x}    ${dim}·${x}  ${cyan}${dispatches.total}${x} ${dim}dispatches${x}`);
+        }
+        console.log(`  ${DASH}`);
+        console.log('');
+        process.stdout.write(`  ${dim}generating standup…${x}`);
+      }
+    },
+  });
 
   if (!raw) {
     process.stdout.write('\r                              \r');
   }
 
-  if (failed || !rawOutput.trim()) {
+  if (failed || !output.trim()) {
     if (!raw) {
       console.log(`  ${red}✗${x}  ${dim}failed to generate standup${x}`);
       console.log('');
@@ -679,7 +630,7 @@ export async function handleStandupCommand(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const report = extractStandupReport(rawOutput);
+  const report = extractStandupReport(output);
   renderStandup(report, data, raw);
   process.exit(0);
 }
