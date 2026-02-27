@@ -5,7 +5,9 @@
 export {
   resolveCwd,
   scanWorkspace,
+  scanWorkspaceAsync,
   scanGitState,
+  scanGitStateAsync,
   type GitState,
   type FileStructure,
   type WorkspaceSnapshot,

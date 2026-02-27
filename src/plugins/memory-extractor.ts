@@ -15,7 +15,7 @@
  */
 
 import { createHash } from 'crypto';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { PluginDispatchResult } from './types';
@@ -97,27 +97,26 @@ function hashContent(content: string): string {
   return createHash('sha1').update(content.trim().toLowerCase()).digest('hex').substring(0, 16);
 }
 
-function loadDedupCache(): DedupCache {
-  const path = getDedupCachePath();
-  if (!existsSync(path)) return {};
+async function loadDedupCache(): Promise<DedupCache> {
   try {
-    return JSON.parse(readFileSync(path, 'utf-8'));
+    const content = await readFile(getDedupCachePath(), 'utf-8');
+    return JSON.parse(content);
   } catch {
     return {};
   }
 }
 
-function saveDedupCache(cache: DedupCache): void {
+async function saveDedupCache(cache: DedupCache): Promise<void> {
   try {
     const path = getDedupCachePath();
-    mkdirSync(join(homedir(), '.mia'), { recursive: true });
+    await mkdir(join(homedir(), '.mia'), { recursive: true });
     const entries = Object.keys(cache);
     let trimmedCache = cache;
     if (entries.length > DEDUP_CACHE_MAX_ENTRIES) {
       const keep = entries.slice(entries.length - Math.floor(DEDUP_CACHE_MAX_ENTRIES / 2));
       trimmedCache = Object.fromEntries(keep.map(k => [k, true])) as DedupCache;
     }
-    writeFileSync(path, JSON.stringify(trimmedCache), 'utf-8');
+    await writeFile(path, JSON.stringify(trimmedCache), 'utf-8');
   } catch {
     // Non-critical
   }
@@ -205,7 +204,7 @@ export class MemoryExtractor {
       return { facts: [], stored: 0, skipped: 0, reason: 'no extractable facts in exchange' };
     }
 
-    const cache = loadDedupCache();
+    const cache = await loadDedupCache();
     const extracted: ExtractedFact[] = rawFacts.map(content => ({
       content,
       hash: hashContent(content),
@@ -232,7 +231,7 @@ export class MemoryExtractor {
     }
 
     if (stored > 0) {
-      saveDedupCache(cache);
+      await saveDedupCache(cache);
       logger.info(`[MemoryExtractor] Stored ${stored} new fact(s) from conv ${conversationId.substring(0, 8)} (${skipped} duplicate(s) skipped)`);
     }
 

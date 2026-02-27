@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import crypto from 'crypto';
 import { formatJson } from '../utils/json-format';
@@ -393,6 +394,36 @@ export function writeMiaConfig(config: Partial<MiaConfig>): MiaConfig {
   const current = readMiaConfig();
   const merged = { ...current, ...config };
   writeFileSync(CONFIG_FILE, formatJson(merged), 'utf-8');
+  return merged;
+}
+
+/**
+ * Async version of readMiaConfig — preferred for daemon hot paths
+ * (SIGHUP, plugin dispatch) to avoid blocking the event loop.
+ */
+export async function readMiaConfigAsync(): Promise<MiaConfig> {
+  let merged: MiaConfig;
+  try {
+    const content = await readFile(CONFIG_FILE, 'utf-8');
+    const parsed = JSON.parse(content) as Partial<MiaConfig>;
+    merged = { ...DEFAULT_CONFIG, ...parsed };
+  } catch {
+    // File doesn't exist or is unreadable — fall back to defaults.
+    return { ...DEFAULT_CONFIG };
+  }
+  validateMiaConfig(merged);
+  return merged;
+}
+
+/**
+ * Async version of writeMiaConfig — preferred for daemon hot paths
+ * to avoid blocking the event loop.
+ */
+export async function writeMiaConfigAsync(config: Partial<MiaConfig>): Promise<MiaConfig> {
+  await mkdir(MIA_DIR, { recursive: true });
+  const current = await readMiaConfigAsync();
+  const merged = { ...current, ...config };
+  await writeFile(CONFIG_FILE, formatJson(merged), 'utf-8');
   return merged;
 }
 

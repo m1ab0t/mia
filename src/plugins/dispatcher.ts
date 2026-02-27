@@ -11,9 +11,12 @@
  * exhausted.
  */
 
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import type { MiaConfig } from '../config';
-import { readMiaConfig, writeMiaConfig } from '../config/mia-config.js';
+import { readMiaConfigAsync, writeMiaConfig } from '../config/mia-config.js';
+
+const execFileAsync = promisify(execFile);
 import { DEFAULT_PLUGIN } from '../constants.js';
 import type { CodingPlugin, CodingPluginCallbacks, DispatchOptions, PluginContext, PluginDispatchResult } from './types';
 import { PluginError, PluginErrorCode } from './types.js';
@@ -41,32 +44,40 @@ export interface DispatcherOptions {
 }
 
 /**
+ * Run a git command asynchronously, returning trimmed stdout or null on failure.
+ */
+async function gitExec(args: string[], cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('git', args, {
+      cwd,
+      encoding: 'utf-8',
+      timeout: 5000,
+    });
+    return stdout.trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Capture the git changes made during a dispatch.
  * Returns uncommitted file changes + any commits made since preDispatchHash.
  * Returns undefined if cwd is not a git repo or git is unavailable.
  */
-function captureGitChanges(cwd: string, preDispatchHash: string): { stat: string; files: string[]; newCommits: string[] } | undefined {
-  const run = (cmd: string): string | null => {
-    try {
-      return execSync(cmd, { cwd, encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
-    } catch {
-      return null;
-    }
-  };
-
+async function captureGitChanges(cwd: string, preDispatchHash: string): Promise<{ stat: string; files: string[]; newCommits: string[] } | undefined> {
   // Check we're in a git repo
-  if (!run('git rev-parse --git-dir')) return undefined;
+  if (!(await gitExec(['rev-parse', '--git-dir'], cwd))) return undefined;
 
   // Uncommitted changes: staged + unstaged vs HEAD
-  const diffStat = run('git diff --stat HEAD') ?? '';
-  const diffNames = run('git diff --name-only HEAD') ?? '';
+  const diffStat = (await gitExec(['diff', '--stat', 'HEAD'], cwd)) ?? '';
+  const diffNames = (await gitExec(['diff', '--name-only', 'HEAD'], cwd)) ?? '';
   const files = diffNames ? diffNames.split('\n').filter(Boolean) : [];
 
   // Commits made during dispatch
-  const currentHash = run('git rev-parse HEAD') ?? '';
+  const currentHash = (await gitExec(['rev-parse', 'HEAD'], cwd)) ?? '';
   let newCommits: string[] = [];
   if (currentHash && preDispatchHash && currentHash !== preDispatchHash) {
-    const log = run(`git log --oneline ${preDispatchHash}..${currentHash}`) ?? '';
+    const log = (await gitExec(['log', '--oneline', `${preDispatchHash}..${currentHash}`], cwd)) ?? '';
     newCommits = log ? log.split('\n').filter(Boolean) : [];
   }
 
@@ -221,11 +232,7 @@ export class PluginDispatcher {
     const workDir = dispatchOptions.workingDirectory;
     let preDispatchHash = '';
     if (workDir) {
-      try {
-        preDispatchHash = execSync('git rev-parse HEAD', {
-          cwd: workDir, encoding: 'utf-8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim();
-      } catch { /* not a git repo or git unavailable */ }
+      preDispatchHash = (await gitExec(['rev-parse', 'HEAD'], workDir)) ?? '';
     }
 
     // Dispatch
@@ -264,7 +271,7 @@ export class PluginDispatcher {
 
     // Capture git changes made during dispatch (non-blocking, failure-silent)
     if (result.success && workDir) {
-      const gitChanges = captureGitChanges(workDir, preDispatchHash);
+      const gitChanges = await captureGitChanges(workDir, preDispatchHash);
       if (gitChanges) {
         result = {
           ...result,
@@ -333,7 +340,7 @@ export class PluginDispatcher {
     // takes effect without a daemon restart. All other config (fallbackPlugins,
     // pluginDispatch, etc.) stays authoritative from the constructor/daemon-level
     // config to avoid clobbering programmatic overrides.
-    const freshConfig = readMiaConfig();
+    const freshConfig = await readMiaConfigAsync();
     this.config = { ...this.config, activePlugin: freshConfig.activePlugin };
     const activePlugin = this.registry.getActive(this.config);
 

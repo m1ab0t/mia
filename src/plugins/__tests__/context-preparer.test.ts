@@ -41,6 +41,15 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>();
+  return {
+    ...actual,
+    readFile: vi.fn(actual.readFile),
+    access: vi.fn(actual.access),
+  };
+});
+
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>();
   return {
@@ -51,7 +60,14 @@ vi.mock('os', async (importOriginal) => {
 
 vi.mock('../../context/workspace-scanner', () => ({
   scanGitState: vi.fn(() => ({ isRepo: false })),
+  scanGitStateAsync: vi.fn(async () => ({ isRepo: false })),
   scanWorkspace: vi.fn(() => ({
+    cwd: TEST_CWD,
+    projectType: 'npm',
+    entryPoints: ['index.js'],
+    files: { totalFiles: 42, recentlyModified: ['src/app.ts', 'src/index.ts'] },
+  })),
+  scanWorkspaceAsync: vi.fn(async () => ({
     cwd: TEST_CWD,
     projectType: 'npm',
     entryPoints: ['index.js'],
@@ -72,9 +88,14 @@ vi.mock('../../utils/conversation-summarizer', () => ({
 // ── Imports after mocks ───────────────────────────────────────────────────────
 
 import { ContextPreparer, classifyPrompt, getBudgetTier } from '../context-preparer';
-import { scanGitState, scanWorkspace } from '../../context/workspace-scanner';
+import { scanGitStateAsync, scanWorkspaceAsync } from '../../context/workspace-scanner';
+
+// Aliases for backward compatibility in test assertions
+const scanGitState = scanGitStateAsync;
+const scanWorkspace = scanWorkspaceAsync;
 import { getRecentMessages } from '../../p2p/message-store';
 import { existsSync as mockExistsSync, readFileSync as mockReadFileSync } from 'fs';
+import { readFile as mockReadFile, access as mockAccess } from 'fs/promises';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -101,6 +122,11 @@ beforeEach(() => {
   const fs = require('fs') as typeof import('fs');
   (mockExistsSync as Mock).mockImplementation(fs.existsSync.bind(fs));
   (mockReadFileSync as Mock).mockImplementation(fs.readFileSync.bind(fs));
+
+  // Restore fs/promises mocks to real implementations.
+  const fsp = require('fs/promises') as typeof import('fs/promises');
+  (mockReadFile as Mock).mockImplementation(fsp.readFile.bind(fsp));
+  (mockAccess as Mock).mockImplementation(fsp.access.bind(fsp));
 });
 
 afterEach(() => {

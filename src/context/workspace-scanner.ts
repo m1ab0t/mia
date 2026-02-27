@@ -2,11 +2,14 @@
  * Workspace Scanner - Scans project state for context building
  */
 
-import { execSync } from 'child_process';
+import { execFile, execSync } from 'child_process';
+import { promisify } from 'util';
 import { existsSync, readdirSync, realpathSync, statSync, watch as fsWatch } from 'fs';
 import type { FSWatcher } from 'fs';
 import { join, relative } from 'path';
 import { splitLines } from '../utils/string-helpers';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Resolve and validate a cwd path.
@@ -113,6 +116,120 @@ export function scanGitState(cwd: string): GitState {
   } catch {
     return { isRepo: true }; // Git repo exists but commands failed
   }
+}
+
+/**
+ * Run a git command asynchronously, returning trimmed stdout or null on failure.
+ */
+async function gitAsync(args: string[], cwd: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 5000,
+  });
+  return stdout.trim();
+}
+
+/**
+ * Async version of scanGitState — does not block the event loop.
+ * Preferred for daemon hot paths (context preparation, plugin dispatch).
+ */
+export async function scanGitStateAsync(cwd: string): Promise<GitState> {
+  if (!existsSync(join(cwd, '.git'))) {
+    return { isRepo: false };
+  }
+
+  try {
+    const branch = await gitAsync(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+
+    const statusOutput = await gitAsync(['status', '--short'], cwd);
+    const statusLines = splitLines(statusOutput);
+
+    const uncommittedChanges: string[] = [];
+    const stagedFiles: string[] = [];
+    const untrackedFiles: string[] = [];
+
+    for (const line of statusLines) {
+      const status = line.substring(0, 2);
+      const file = line.substring(3);
+
+      if (status.includes('M') || status.includes('D')) {
+        uncommittedChanges.push(file);
+      }
+      if (status[0] !== ' ' && status[0] !== '?') {
+        stagedFiles.push(file);
+      }
+      if (status.includes('?')) {
+        untrackedFiles.push(file);
+      }
+    }
+
+    const logOutput = await gitAsync(['log', '--oneline', '-n', '5'], cwd);
+    const recentCommits = logOutput.split('\n').filter(Boolean);
+
+    return {
+      isRepo: true,
+      branch,
+      status: statusOutput || 'clean',
+      recentCommits,
+      uncommittedChanges,
+      stagedFiles,
+      untrackedFiles,
+    };
+  } catch {
+    return { isRepo: true }; // Git repo exists but commands failed
+  }
+}
+
+/**
+ * Async version of scanWorkspace — does not block the event loop.
+ * Uses the same cache as the sync version.
+ */
+export async function scanWorkspaceAsync(cwd: string): Promise<WorkspaceSnapshot> {
+  const resolved = resolveCwd(cwd);
+
+  const cached = snapshotCache.get(resolved);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached;
+  }
+
+  const git = await scanGitStateAsync(resolved);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+  let fileData = {
+    files: [] as string[],
+    directories: [] as string[],
+    recentlyModified: [] as string[],
+    largeFiles: [] as string[],
+    configFiles: [] as string[],
+  };
+  try {
+    fileData = scanDirectory(resolved, resolved, 4, 0, controller.signal);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const snapshot: WorkspaceSnapshot = {
+    cwd: resolved,
+    timestamp: Date.now(),
+    git,
+    files: {
+      totalFiles: fileData.files.length,
+      totalDirectories: fileData.directories.length,
+      recentlyModified: fileData.recentlyModified.slice(0, 10),
+      largeFiles: fileData.largeFiles.slice(0, 5),
+      configFiles: fileData.configFiles,
+    },
+    projectType: detectProjectType(resolved),
+    entryPoints: findEntryPoints(resolved),
+  };
+
+  snapshotCache.set(resolved, snapshot);
+  startWatcher(resolved);
+
+  return snapshot;
 }
 
 /**

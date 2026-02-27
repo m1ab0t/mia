@@ -6,14 +6,13 @@ import { describe, it, expect, beforeEach, vi, type MockInstance } from 'vitest'
 import { MemoryExtractor, type UtilityDispatchFn } from '../memory-extractor';
 import type { PluginDispatchResult } from '../types';
 
-vi.mock('fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('fs')>();
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>();
   return {
     ...actual,
-    existsSync: vi.fn(() => false),
-    readFileSync: vi.fn(() => '{}'),
-    writeFileSync: vi.fn(),
-    mkdirSync: vi.fn(),
+    readFile: vi.fn(async () => '{}'),
+    writeFile: vi.fn(async () => {}),
+    mkdir: vi.fn(async () => undefined),
   };
 });
 
@@ -149,8 +148,7 @@ describe('MemoryExtractor', () => {
     });
 
     it('skips facts whose hash is already in the dedup cache', async () => {
-      const { existsSync, readFileSync } = await import('fs');
-      (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      const { readFile } = await import('fs/promises');
 
       const { createHash } = await import('crypto');
       const hash = createHash('sha1')
@@ -158,7 +156,7 @@ describe('MemoryExtractor', () => {
         .digest('hex')
         .substring(0, 16);
 
-      (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(JSON.stringify({ [hash]: true }));
+      (readFile as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify({ [hash]: true }));
 
       const store = makeStore();
       const { extractor, spy } = makeExtractor(store);
@@ -175,11 +173,10 @@ describe('MemoryExtractor', () => {
     });
 
     it('does not store same fact across two calls', async () => {
-      const { existsSync, readFileSync, writeFileSync } = await import('fs');
+      const { readFile, writeFile } = await import('fs/promises');
       let savedCache = '{}';
-      (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
-      (readFileSync as ReturnType<typeof vi.fn>).mockImplementation(() => savedCache);
-      (writeFileSync as ReturnType<typeof vi.fn>).mockImplementation((_path: string, data: string) => {
+      (readFile as ReturnType<typeof vi.fn>).mockImplementation(async () => savedCache);
+      (writeFile as ReturnType<typeof vi.fn>).mockImplementation(async (_path: string, data: string) => {
         savedCache = data;
       });
 

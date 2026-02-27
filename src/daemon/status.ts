@@ -6,7 +6,7 @@
 
 import { getP2PStatus } from '../p2p/index';
 import { getScheduler } from '../scheduler/index';
-import { writeStatusFile, type DaemonStatus } from './pid';
+import { writeStatusFileAsync, type DaemonStatus } from './pid';
 
 export interface PluginMetrics {
   getRunningTasks(): { taskId: string; status: string; startedAt: number }[];
@@ -57,7 +57,7 @@ export class StatusManager {
   }
 
   /**
-   * Write current daemon status to file
+   * Write current daemon status to file (async to avoid blocking event loop)
    */
   private update(): void {
     const p2pStatus = getP2PStatus();
@@ -83,6 +83,8 @@ export class StatusManager {
       }),
     };
 
-    writeStatusFile(status);
+    writeStatusFileAsync(status).catch(() => {
+      // Non-critical — status file write failure shouldn't crash the daemon.
+    });
   }
 }

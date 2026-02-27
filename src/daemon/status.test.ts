@@ -26,6 +26,7 @@ vi.mock('../scheduler/index.js', () => ({
 
 vi.mock('./pid.js', () => ({
   writeStatusFile: vi.fn(),
+  writeStatusFileAsync: vi.fn(async () => {}),
 }));
 
 // ── Imports after mocks ───────────────────────────────────────────────────────
@@ -33,7 +34,10 @@ vi.mock('./pid.js', () => ({
 import { StatusManager, type PluginMetrics, type StatusManagerConfig } from './status.js';
 import { getP2PStatus } from '../p2p/index.js';
 import { getScheduler } from '../scheduler/index.js';
-import { writeStatusFile } from './pid.js';
+import { writeStatusFileAsync } from './pid.js';
+
+// Alias so existing assertions read the same
+const writeStatusFile = writeStatusFileAsync;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

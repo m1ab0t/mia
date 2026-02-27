@@ -5,8 +5,11 @@
  * Provides the agent with awareness of branch, status, and recent history.
  */
 
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { splitLines } from './string-helpers';
+
+const execFileAsync = promisify(execFile);
 
 export interface GitContext {
   isRepo: boolean;
@@ -22,14 +25,14 @@ export interface GitContext {
 /**
  * Run a git command and return stdout, or null on failure.
  */
-function git(cmd: string, cwd: string): string | null {
+async function git(args: string[], cwd: string): Promise<string | null> {
   try {
-    return execSync(`git ${cmd}`, {
+    const { stdout } = await execFileAsync('git', args, {
       cwd,
       encoding: 'utf-8',
       timeout: 5000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+    });
+    return stdout.trim();
   } catch {
     return null;
   }
@@ -39,15 +42,15 @@ function git(cmd: string, cwd: string): string | null {
  * Gather git context for the given directory.
  * Returns null if not a git repository.
  */
-export function gatherGitContext(cwd: string): GitContext | null {
+export async function gatherGitContext(cwd: string): Promise<GitContext | null> {
   // Check if it's a git repo
-  const topLevel = git('rev-parse --show-toplevel', cwd);
+  const topLevel = await git(['rev-parse', '--show-toplevel'], cwd);
   if (!topLevel) return null;
 
-  const branch = git('branch --show-current', cwd) || 'detached HEAD';
+  const branch = (await git(['branch', '--show-current'], cwd)) || 'detached HEAD';
 
   // Parse porcelain status for counts
-  const status = git('status --porcelain', cwd) || '';
+  const status = (await git(['status', '--porcelain'], cwd)) || '';
   const lines = splitLines(status);
 
   let untrackedCount = 0;
@@ -68,11 +71,11 @@ export function gatherGitContext(cwd: string): GitContext | null {
   const isDirty = lines.length > 0;
 
   // Recent commits (last 5, one-line format)
-  const log = git('log --oneline -5 2>/dev/null', cwd) || '';
+  const log = (await git(['log', '--oneline', '-5'], cwd)) || '';
   const recentCommits = splitLines(log);
 
   // Check if remote exists
-  const hasRemote = !!git('remote', cwd);
+  const hasRemote = !!(await git(['remote'], cwd));
 
   return {
     isRepo: true,

@@ -31,7 +31,7 @@ loadMiaEnv();
 const MIA_VERSION = typeof __MIA_VERSION__ !== 'undefined' ? __MIA_VERSION__ : 'dev';
 const MIA_COMMIT = typeof __MIA_COMMIT__ !== 'undefined' ? __MIA_COMMIT__ : 'dev';
 
-import { readMiaConfig, writeMiaConfig } from '../config';
+import { readMiaConfig, readMiaConfigAsync, writeMiaConfig } from '../config';
 import { gatherCodebaseContext } from '../utils/codebase_context';
 import { log } from '../utils/logger';
 import { cacheCodebaseContext } from '../context/index';
@@ -606,7 +606,7 @@ async function main() {
   process.on('SIGHUP', async () => {
     log('info', 'SIGHUP: reloading config from ~/.mia/mia.json');
     try {
-      const freshConfig = readMiaConfig();
+      const freshConfig = await readMiaConfigAsync();
 
       // 1. Update dispatcher-level config; returns a human-readable diff.
       const changes = pluginDispatcher.applyConfig(freshConfig);
@@ -649,8 +649,8 @@ async function main() {
   // being run from the CLI.  The CLI writes the new activePlugin to mia.json
   // and then sends this signal so the daemon picks it up in realtime and
   // broadcasts plugin_switched to every connected mobile peer.
-  process.on('SIGUSR2', () => {
-    const newConfig = readMiaConfig();
+  process.on('SIGUSR2', async () => {
+    const newConfig = await readMiaConfigAsync();
     const newPlugin = newConfig.activePlugin || 'claude-code';
     log('info', `SIGUSR2: switching active plugin to '${newPlugin}'`);
     const result = pluginDispatcher.switchPlugin(newPlugin);

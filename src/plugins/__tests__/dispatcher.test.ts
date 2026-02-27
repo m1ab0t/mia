@@ -10,14 +10,16 @@ import type { PostDispatchVerifier } from '../verifier';
 import type { MiaConfig } from '../../config';
 
 // Mock readMiaConfig so dispatch() doesn't read from disk
+const mockConfig = {
+  classifierModel: 'claude-sonnet-4-6',
+  defaultRoute: 'coding',
+  maxConcurrency: 3,
+  timeoutMs: 30_000,
+  activePlugin: 'claude-code',
+};
 vi.mock('../../config/mia-config.js', () => ({
-  readMiaConfig: () => ({
-    classifierModel: 'claude-sonnet-4-6',
-    defaultRoute: 'coding',
-    maxConcurrency: 3,
-    timeoutMs: 30_000,
-    activePlugin: 'claude-code',
-  }),
+  readMiaConfig: () => mockConfig,
+  readMiaConfigAsync: async () => mockConfig,
   writeMiaConfig: vi.fn(),
 }));
 

@@ -1,6 +1,8 @@
 export {
   readMiaConfig,
+  readMiaConfigAsync,
   writeMiaConfig,
+  writeMiaConfigAsync,
   getActiveModelConfig,
   getCodingModelConfig,
   getGeneralModelConfig,

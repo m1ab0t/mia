@@ -26,10 +26,10 @@
  * projectInstructions (CLAUDE.md, personality) — the stable identity layer.
  */
 
-import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { scanGitState, scanWorkspace, type WorkspaceSnapshot } from '../context/workspace-scanner';
+import { readFile, access } from 'fs/promises';
+import { scanGitStateAsync, scanWorkspaceAsync, type WorkspaceSnapshot } from '../context/workspace-scanner';
 import { getRecentMessages, type StoredMessage } from '../p2p/message-store';
 import { summarizeMessages } from '../utils/conversation-summarizer';
 import type { PluginContext } from './types';
@@ -247,9 +247,9 @@ export class ContextPreparer {
     }
   }
 
-  private _gatherGitContext(cwd: string): string {
+  private async _gatherGitContext(cwd: string): Promise<string> {
     try {
-      const git = scanGitState(cwd);
+      const git = await scanGitStateAsync(cwd);
       if (!git.isRepo) return 'Not a git repository.';
 
       const lines: string[] = [];
@@ -272,9 +272,9 @@ export class ContextPreparer {
     }
   }
 
-  private _gatherWorkspaceSnapshot(cwd: string): string {
+  private async _gatherWorkspaceSnapshot(cwd: string): Promise<string> {
     try {
-      const snapshot: WorkspaceSnapshot = scanWorkspace(cwd);
+      const snapshot: WorkspaceSnapshot = await scanWorkspaceAsync(cwd);
       const lines: string[] = [];
 
       lines.push(`Working Directory: ${snapshot.cwd}`);
@@ -293,7 +293,7 @@ export class ContextPreparer {
     }
   }
 
-  private _loadProjectInstructions(cwd: string): string {
+  private async _loadProjectInstructions(cwd: string): Promise<string> {
     const candidates = [
       join(cwd, '.claude-code-instructions'),
       join(cwd, '.claude-instructions'),
@@ -302,12 +302,12 @@ export class ContextPreparer {
     ];
 
     for (const candidate of candidates) {
-      if (existsSync(candidate)) {
-        try {
-          return readFileSync(candidate, 'utf-8').trim();
-        } catch {
-          // continue trying other candidates
-        }
+      try {
+        await access(candidate);
+        const content = await readFile(candidate, 'utf-8');
+        return content.trim();
+      } catch {
+        // continue trying other candidates
       }
     }
 
@@ -425,24 +425,20 @@ export class ContextPreparer {
    * Load PERSONALITY.md and USER.md from ~/.mia — the user's persistent
    * identity files. Combined into a single string for injection.
    */
-  private _loadPersonalityContext(): string {
+  private async _loadPersonalityContext(): Promise<string> {
     const parts: string[] = [];
 
     const personalityPath = join(MIA_HOME, 'PERSONALITY.md');
-    if (existsSync(personalityPath)) {
-      try {
-        const content = readFileSync(personalityPath, 'utf-8').trim();
-        if (content) parts.push(`## Personality\n${content}`);
-      } catch { /* non-critical */ }
-    }
+    try {
+      const content = (await readFile(personalityPath, 'utf-8')).trim();
+      if (content) parts.push(`## Personality\n${content}`);
+    } catch { /* non-critical — file may not exist */ }
 
     const userPath = join(MIA_HOME, 'USER.md');
-    if (existsSync(userPath)) {
-      try {
-        const content = readFileSync(userPath, 'utf-8').trim();
-        if (content) parts.push(`## User Profile\n${content}`);
-      } catch { /* non-critical */ }
-    }
+    try {
+      const content = (await readFile(userPath, 'utf-8')).trim();
+      if (content) parts.push(`## User Profile\n${content}`);
+    } catch { /* non-critical — file may not exist */ }
 
     return parts.join('\n\n');
   }

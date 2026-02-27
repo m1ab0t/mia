@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { formatJson } from '../utils/json-format';
 import { MIA_DIR } from '../constants/paths';
@@ -64,6 +65,15 @@ export function isProcessRunning(pid: number): boolean {
 export function writeStatusFile(status: DaemonStatus): void {
   ensureMiaDir();
   writeFileSync(STATUS_FILE, formatJson(status), 'utf-8');
+}
+
+/**
+ * Async version of writeStatusFile — preferred for daemon periodic updates
+ * to avoid blocking the event loop.
+ */
+export async function writeStatusFileAsync(status: DaemonStatus): Promise<void> {
+  await mkdir(MIA_DIR, { recursive: true });
+  await writeFile(STATUS_FILE, formatJson(status), 'utf-8');
 }
 
 export function readStatusFile(): DaemonStatus | null {

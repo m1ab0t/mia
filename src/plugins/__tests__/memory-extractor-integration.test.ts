@@ -7,14 +7,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { MemoryExtractor, type UtilityDispatchFn } from '../memory-extractor';
 import type { PluginDispatchResult } from '../types';
 
-vi.mock('fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('fs')>();
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs/promises')>();
   return {
     ...actual,
-    existsSync: vi.fn(() => false),
-    readFileSync: vi.fn(() => '{}'),
-    writeFileSync: vi.fn(),
-    mkdirSync: vi.fn(),
+    readFile: vi.fn(async () => '{}'),
+    writeFile: vi.fn(async () => {}),
+    mkdir: vi.fn(async () => undefined),
   };
 });
 
