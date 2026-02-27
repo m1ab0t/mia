@@ -35,7 +35,7 @@
     "claude"
   ],
   "author": "Cloud",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
     "@clack/prompts": "^1.0.1",
