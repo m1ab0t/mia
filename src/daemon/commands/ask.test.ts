@@ -5,7 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { parseAskArgs, buildAskPrompt, readStdinContent } from './ask.js';
+import { parseAskArgs, buildAskPrompt } from './ask.js';
+import { readStdinContent } from './parse-utils.js';
 import type { AskArgs } from './ask.js';
 
 // ── parseAskArgs ──────────────────────────────────────────────────────────────

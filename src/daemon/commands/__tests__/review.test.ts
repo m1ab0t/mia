@@ -12,11 +12,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   parseReviewArgs,
-  parseDiffStats,
   buildReviewPrompt,
   parseReviewOutput,
   renderReview,
 } from '../review.js';
+import { parseDiffStats } from '../parse-utils.js';
 import type { ReviewContent, ReviewIssue } from '../review.js';
 
 // ──────────────────────────────────────────────────────────────────────────────

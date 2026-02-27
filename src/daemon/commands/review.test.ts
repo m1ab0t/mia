@@ -8,12 +8,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   parseReviewArgs,
-  parseDiffStats,
   buildReviewPrompt,
   parseReviewOutput,
   renderReview,
   renderRawReview,
 } from './review.js';
+import { parseDiffStats } from './parse-utils.js';
 import type { ReviewContent } from './review.js';
 
 // ── Sample diff ───────────────────────────────────────────────────────────────

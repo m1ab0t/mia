@@ -8,10 +8,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseCommitArgs,
-  parseDiffStats,
   buildCommitPrompt,
   extractCommitMessage,
 } from './commit.js';
+import { parseDiffStats } from './parse-utils.js';
 
 // ── Sample diff ───────────────────────────────────────────────────────────────
 
