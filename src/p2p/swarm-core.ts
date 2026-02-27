@@ -71,6 +71,23 @@ export type { MessageHandler, SwitchPluginCallback, GetPluginsCallback, Schedule
 
 const ERROR_SWARM_ALREADY_RUNNING = 'P2P swarm already running. Use "p2p disconnect" first.';
 
+/** Timeout (ms) for message store init — fail fast instead of hanging. */
+const MESSAGE_STORE_INIT_TIMEOUT_MS = 15_000;
+
+/** Race a promise against a timeout; rejects with a descriptive error. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms,
+    );
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 interface P2PStatus {
   connected: boolean;
   key: string | null;
@@ -195,7 +212,7 @@ async function ensureMessageStore(): Promise<boolean> {
   try {
     logger.debug('[P2P] Attempting lazy message store initialization...');
     await closeMessageStore();
-    await initMessageStore();
+    await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Lazy message store init');
     messageStoreReady = true;
     logger.debug('[P2P] Lazy message store initialization succeeded');
     await flushWriteBuffer();
@@ -634,7 +651,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
 
     // ── Initialise message store and optionally resume a conversation ─────
     try {
-      await initMessageStore();
+      await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Message store init');
       messageStoreReady = true;
       resumedConversationId = null;
 
@@ -660,7 +677,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         if (errMsg.toLowerCase().includes('session is closed') || errMsg.includes('not initialized')) {
           try {
             await closeMessageStore();
-            await initMessageStore();
+            await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Message store reinit');
             messageStoreReady = true;
           } catch (reinitErr) {
             messageStoreReady = false;
