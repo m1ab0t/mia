@@ -50,7 +50,7 @@ import { getScheduler, initScheduler, SCHEDULER_DEFAULT_TIMEOUT_MS } from '../sc
 import { MessageQueue } from './queue';
 import { StatusManager } from './status';
 import { spawnP2PSubAgent } from './services';
-import { routeMessage } from './router';
+import { routeMessage, isP2PDispatching } from './router';
 import type { ImageAttachment } from '../p2p/ipc-types';
 import { DAEMON_CONFIG, type LogLevel } from './config';
 import { armShutdownTimeout } from './commands/lifecycle.js';
@@ -349,7 +349,11 @@ async function main() {
     // Skip this tick if the user has an active P2P job in flight.
     // Running a heavy background task while the user is waiting for a response
     // would compete for CPU/context and could corrupt the conversation flow.
-    if (queue.isProcessing()) {
+    // NOTE: Previously used queue.isProcessing() which was always false because
+    // P2P messages bypass the MessageQueue entirely (they go through
+    // routeMessage → pluginDispatcher.dispatch directly). isP2PDispatching()
+    // tracks the actual dispatch count.
+    if (isP2PDispatching()) {
       log('info', `Scheduler: skipping task "${task.name}" — P2P job in progress`);
       return;
     }
@@ -473,11 +477,14 @@ async function main() {
     log,
     performRestart,
     () => {
-      // Use queue.isProcessing() instead of plugin.getRunningTaskCount() so
-      // that background scheduler dispatches (which bypass the queue) are NOT
-      // reported as "running" to the mobile app.  This prevents the typing
-      // indicator from appearing during scheduled tasks.
-      const running = queue.isProcessing();
+      // Use isP2PDispatching() instead of plugin.getRunningTaskCount() so
+      // that background scheduler dispatches (which go directly to the plugin
+      // dispatcher) are NOT reported as "running" to the mobile app.  This
+      // prevents the typing indicator from appearing during scheduled tasks.
+      // NOTE: Previously used queue.isProcessing() which was always false
+      // because P2P messages bypass the MessageQueue — they go through
+      // routeMessage → pluginDispatcher.dispatch directly.
+      const running = isP2PDispatching();
       return { running, count: running ? 1 : 0 };
     },
   );

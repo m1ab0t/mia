@@ -34,6 +34,23 @@ export interface QueueItem {
 // Defined once in config.ts — shared with services.ts.
 const CONTROL_MSG_TYPES = CONTROL_MESSAGE_TYPES
 
+// ── P2P dispatch tracker ──────────────────────────────────────────────
+// Tracks how many P2P-initiated plugin dispatches are currently in flight.
+// The MessageQueue was previously used for this but P2P messages bypass
+// it entirely (going through routeMessage directly), so queue.isProcessing()
+// was always false — breaking the scheduler's skip-if-busy guard and the
+// mobile task-status reporting.
+let activeP2PDispatches = 0
+
+/**
+ * Whether any P2P-initiated plugin dispatch is currently running.
+ * Used by the scheduler guard (skip if user has an active job) and by
+ * the mobile task-status callback (typing indicator).
+ */
+export function isP2PDispatching(): boolean {
+  return activeP2PDispatches > 0
+}
+
 /**
  * Routes a message to the active plugin dispatcher.
  * All messages — regardless of source or content — go to the plugin.
@@ -94,6 +111,12 @@ export async function routeMessage(
     // appear in the wrong place on the mobile. Capturing it here prevents that.
     const effectiveConvId = overrideConversationId ?? conversationId
 
+    // Track P2P dispatches so the scheduler guard and mobile task-status
+    // reporting know when a user-initiated job is in flight.  Previously
+    // this was done via MessageQueue.isProcessing() but P2P messages bypass
+    // the queue entirely, so the counter was always zero.
+    activeP2PDispatches++
+
     const taskId = await pluginDispatcher
       .dispatch(message, conversationId, { skipMemoryExtraction: true }, {
         onToken: (token) => sendP2PRawToken(token, effectiveConvId),
@@ -140,6 +163,9 @@ export async function routeMessage(
           isPluginErr ? err.detail : undefined,
         )
         return 'error'
+      })
+      .finally(() => {
+        activeP2PDispatches = Math.max(0, activeP2PDispatches - 1)
       })
 
     logger('info', `Plugin task ${taskId.substring(0, 8)} dispatched for ${source} message`)
