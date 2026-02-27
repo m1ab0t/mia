@@ -85,8 +85,10 @@ export function scanGitState(cwd: string): GitState {
     const untrackedFiles: string[] = [];
 
     for (const line of statusLines) {
+      if (line.length < 4) continue; // XY + space + at least one filename char
       const status = line.substring(0, 2);
-      const file = line.substring(3);
+      const file = line.substring(3).trim();
+      if (!file) continue;
 
       if (status.includes('M') || status.includes('D')) {
         uncommittedChanges.push(file);
@@ -150,8 +152,10 @@ export async function scanGitStateAsync(cwd: string): Promise<GitState> {
     const untrackedFiles: string[] = [];
 
     for (const line of statusLines) {
+      if (line.length < 4) continue; // XY + space + at least one filename char
       const status = line.substring(0, 2);
-      const file = line.substring(3);
+      const file = line.substring(3).trim();
+      if (!file) continue;
 
       if (status.includes('M') || status.includes('D')) {
         uncommittedChanges.push(file);
