@@ -1,9 +1,12 @@
 /**
- * Usage analytics — `mia usage [today|week|all]`
+ * Usage analytics — `mia usage [today|week|all] [--json]`
  *
  * Parses NDJSON trace files from ~/.mia/traces/ and surfaces actionable
  * metrics: dispatch counts, duration, tool calls, success rate, per-plugin
  * breakdown, top tools used, and token counts where available (codex).
+ *
+ * The `--json` flag outputs the full aggregated stats as JSON for scripting
+ * and automation (e.g. piping to `jq`, building dashboards, mobile app).
  */
 
 import { existsSync, readdirSync, readFileSync } from 'fs';
@@ -95,6 +98,37 @@ interface AggregatedStats {
   dateRange: { from: string; to: string };
   traceCount: number;
   topCommandsByTokens: CommandTokenEntry[];  // top N most token-expensive invocations
+}
+
+// ──────────────────────────────────────────────────────
+// Argument parsing
+// ──────────────────────────────────────────────────────
+
+export interface UsageArgs {
+  window: Window;
+  json: boolean;
+}
+
+/**
+ * Parse usage subcommand + flags into structured args.
+ * Accepts the old single-string form (`handleUsageCommand('today')`) and
+ * the new argv-array form (`handleUsageCommand(['today', '--json'])`).
+ * Exported for testing.
+ */
+export function parseUsageArgs(input: string | string[]): UsageArgs {
+  const tokens = typeof input === 'string' ? [input] : input;
+
+  let window: Window = 'today';
+  let json = false;
+
+  for (const token of tokens) {
+    if (token === 'week')  window = 'week';
+    else if (token === 'all') window = 'all';
+    else if (token === 'today') window = 'today';
+    else if (token === '--json') json = true;
+  }
+
+  return { window, json };
 }
 
 // ──────────────────────────────────────────────────────
@@ -534,16 +568,60 @@ function renderTopCommandsByTokens(stats: AggregatedStats): void {
 }
 
 // ──────────────────────────────────────────────────────
+// JSON output
+// ──────────────────────────────────────────────────────
+
+/**
+ * Serialise the AggregatedStats as JSON for `--json` mode.
+ *
+ * Adds a `window` field and converts non-JSON-safe values (e.g. Infinity in
+ * tool latency min) to clean numbers.
+ */
+function renderUsageJson(stats: AggregatedStats, window: Window): void {
+  // Clean up Infinity values from tool latency (minMs defaults to Infinity)
+  const cleanLatency: Record<string, { count: number; avgMs: number; p95Ms: number; maxMs: number }> = {};
+  for (const [name, ls] of Object.entries(stats.toolLatency)) {
+    const sorted = [...ls.samples].sort((a, b) => a - b);
+    const idx = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
+    cleanLatency[name] = {
+      count: ls.count,
+      avgMs: ls.count > 0 ? Math.round(ls.totalMs / ls.count) : 0,
+      p95Ms: sorted[idx] ?? 0,
+      maxMs: ls.maxMs === 0 ? 0 : ls.maxMs,
+    };
+  }
+
+  const output = {
+    window,
+    dateRange: stats.dateRange,
+    totalDispatches: stats.totalDispatches,
+    totalDurationMs: stats.totalDurationMs,
+    totalToolCalls: stats.totalToolCalls,
+    successCount: stats.successCount,
+    failCount: stats.failCount,
+    byPlugin: stats.byPlugin,
+    toolFrequency: stats.toolFrequency,
+    toolLatency: cleanLatency,
+    hourlyDispatches: stats.hourlyDispatches,
+    topCommandsByTokens: stats.topCommandsByTokens,
+  };
+
+  console.log(JSON.stringify(output, null, 2));
+}
+
+// ──────────────────────────────────────────────────────
 // Entry point
 // ──────────────────────────────────────────────────────
 
-export async function handleUsageCommand(sub: string): Promise<void> {
-  const window: Window =
-    sub === 'week' ? 'week' :
-    sub === 'all'  ? 'all'  :
-    'today';
+export async function handleUsageCommand(sub: string | string[]): Promise<void> {
+  const args = parseUsageArgs(sub);
+  const { window, json } = args;
 
   if (!existsSync(TRACES_DIR)) {
+    if (json) {
+      console.log(JSON.stringify({ window, totalDispatches: 0 }, null, 2));
+      return;
+    }
     console.log('');
     console.log(`  ${bold}usage${x}`);
     console.log(`  ${DASH}`);
@@ -556,6 +634,11 @@ export async function handleUsageCommand(sub: string): Promise<void> {
   const dates = getTargetDates(window);
   const records = loadTraces(dates);
   const stats = aggregate(records);
+
+  if (json) {
+    renderUsageJson(stats, window);
+    return;
+  }
 
   renderHeader(window, stats);
   renderSummary(stats);
