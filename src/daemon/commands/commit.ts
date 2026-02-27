@@ -28,7 +28,7 @@
 import * as readline from 'readline';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
 import { dispatchToPlugin } from './dispatch.js';
-import { git, gitSafe, isGitRepo, parseDiffStats, type DiffStats } from './parse-utils.js';
+import { git, gitSafe, isGitRepo, parseDiffStats } from './parse-utils.js';
 import { MAX_DIFF_CHARS_COMMIT as MAX_DIFF_CHARS } from './config-constants.js';
 
 // ── Argument parsing ──────────────────────────────────────────────────────────

@@ -39,13 +39,13 @@ import {
 
 const SEP = '\x1f';
 
-function makeCommitLine(hash = 'abc123def', author = 'rj', when = '2 hours ago', subject = 'fix: auth bug'): string {
+function makeCommitLine(hash = 'abc123def', author = 'user', when = '2 hours ago', subject = 'fix: auth bug'): string {
   return [hash, author, when, subject].join(SEP);
 }
 
 function makeActivity(overrides: Partial<RepoActivity> = {}): RepoActivity {
   return {
-    path: '/home/rj/myproject',
+    path: '/home/user/myproject',
     name: 'myproject',
     branch: 'main',
     commits: [],
@@ -236,11 +236,11 @@ describe('getRecentCommits', () => {
   });
 
   it('parses a single commit line correctly', () => {
-    const line = makeCommitLine('abc123def456', 'Richard', '3 hours ago', 'feat: add login');
+    const line = makeCommitLine('abc123def456', 'The user', '3 hours ago', 'feat: add login');
     const git = vi.fn().mockReturnValue(line);
-    const [commit] = getRecentCommits('/home/rj/proj', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
+    const [commit] = getRecentCommits('/home/user/proj', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
     expect(commit.hash).toBe('abc123def');   // sliced to 9 chars
-    expect(commit.author).toBe('Richard');
+    expect(commit.author).toBe('The user');
     expect(commit.when).toBe('3 hours ago');
     expect(commit.subject).toBe('feat: add login');
     expect(commit.repo).toBe('proj');
@@ -248,8 +248,8 @@ describe('getRecentCommits', () => {
 
   it('parses multiple commit lines', () => {
     const lines = [
-      makeCommitLine('aaa111', 'rj', '1 hour ago', 'fix: bug'),
-      makeCommitLine('bbb222', 'rj', '2 hours ago', 'feat: feature'),
+      makeCommitLine('aaa111', 'user', '1 hour ago', 'fix: bug'),
+      makeCommitLine('bbb222', 'user', '2 hours ago', 'feat: feature'),
     ].join('\n');
     const git = vi.fn().mockReturnValue(lines);
     const commits = getRecentCommits('/repo', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
@@ -257,14 +257,14 @@ describe('getRecentCommits', () => {
   });
 
   it('skips blank lines', () => {
-    const lines = makeCommitLine() + '\n\n' + makeCommitLine('xyz789', 'rj', '5 min ago', 'chore: update');
+    const lines = makeCommitLine() + '\n\n' + makeCommitLine('xyz789', 'user', '5 min ago', 'chore: update');
     const git = vi.fn().mockReturnValue(lines);
     const commits = getRecentCommits('/repo', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
     expect(commits).toHaveLength(2);
   });
 
   it('handles subject containing the separator character gracefully', () => {
-    const line = ['abc', 'rj', '1h ago', 'fix: include\x1ftab'].join(SEP);
+    const line = ['abc', 'user', '1h ago', 'fix: include\x1ftab'].join(SEP);
     const git = vi.fn().mockReturnValue(line);
     const [c] = getRecentCommits('/repo', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
     // Subject gets the remainder, including any extra sep chars joined back
@@ -281,7 +281,7 @@ describe('getRecentCommits', () => {
 
   it('uses repo basename as the commit repo name', () => {
     const git = vi.fn().mockReturnValue(makeCommitLine());
-    const [c] = getRecentCommits('/home/rj/coolproject', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
+    const [c] = getRecentCommits('/home/user/coolproject', '2026-02-22T00:00:00Z', '2026-02-22T23:59:59Z', git);
     expect(c.repo).toBe('coolproject');
   });
 });
@@ -336,14 +336,14 @@ describe('gatherRepoActivity', () => {
       if (args.includes('--is-inside-work-tree')) return 'true';
       if (args.includes('--abbrev-ref')) return 'feat/login';
       if (args.includes('--format=%H\x1f%an\x1f%ar\x1f%s')) {
-        return makeCommitLine('abc123', 'rj', '1h ago', 'feat: login');
+        return makeCommitLine('abc123', 'user', '1h ago', 'feat: login');
       }
       if (args.includes('--short')) return 'M  src/file.ts';
       return null;
     });
     const since = new Date('2026-02-22T00:00:00Z');
     const until = new Date('2026-02-22T23:59:59Z');
-    const activity = gatherRepoActivity('/home/rj/myproject', since, until, git);
+    const activity = gatherRepoActivity('/home/user/myproject', since, until, git);
     expect(activity).not.toBeNull();
     expect(activity!.name).toBe('myproject');
     expect(activity!.branch).toBe('feat/login');
@@ -359,7 +359,7 @@ describe('gatherRepoActivity', () => {
       if (args.includes('--abbrev-ref')) return 'main';
       return null;
     });
-    const activity = gatherRepoActivity('/home/rj/proj', new Date(), new Date(), git);
+    const activity = gatherRepoActivity('/home/user/proj', new Date(), new Date(), git);
     expect(activity!.openPrs).toBeInstanceOf(Array);
   });
 });
@@ -508,7 +508,7 @@ describe('buildStandupPrompt', () => {
   it('includes commit subjects', () => {
     const data = makeData({
       repos: [makeActivity({
-        commits: [{ hash: 'abc', author: 'rj', when: '1h ago', subject: 'feat: awesome feature', repo: 'proj' }],
+        commits: [{ hash: 'abc', author: 'user', when: '1h ago', subject: 'feat: awesome feature', repo: 'proj' }],
       })],
     });
     const prompt = buildStandupPrompt(data);
@@ -566,7 +566,7 @@ describe('buildStandupPrompt', () => {
     const hugeSubject = 'x'.repeat(500);
     const commits = Array.from({ length: 100 }, (_, i) => ({
       hash: `h${i}`,
-      author: 'rj',
+      author: 'user',
       when: '1h ago',
       subject: hugeSubject,
       repo: 'proj',
@@ -581,7 +581,7 @@ describe('buildStandupPrompt', () => {
     const data = makeData({
       repos: [
         makeActivity({ name: 'frontend', branch: 'main' }),
-        makeActivity({ name: 'backend', branch: 'develop', path: '/home/rj/backend' }),
+        makeActivity({ name: 'backend', branch: 'develop', path: '/home/user/backend' }),
       ],
     });
     const prompt = buildStandupPrompt(data);
@@ -672,8 +672,8 @@ describe('renderStandup — smoke test', () => {
       repos: [makeActivity({
         name: 'myrepo',
         commits: [
-          { hash: 'a', author: 'rj', when: '1h ago', subject: 'fix: bug', repo: 'myrepo' },
-          { hash: 'b', author: 'rj', when: '2h ago', subject: 'feat: feature', repo: 'myrepo' },
+          { hash: 'a', author: 'user', when: '1h ago', subject: 'fix: bug', repo: 'myrepo' },
+          { hash: 'b', author: 'user', when: '2h ago', subject: 'feat: feature', repo: 'myrepo' },
         ],
       })],
     });
@@ -728,7 +728,7 @@ describe('renderDryRun — smoke test', () => {
   it('shows commit subjects', () => {
     const data = makeData({
       repos: [makeActivity({
-        commits: [{ hash: 'abc123', author: 'rj', when: '1h ago', subject: 'fix: the bug', repo: 'proj' }],
+        commits: [{ hash: 'abc123', author: 'user', when: '1h ago', subject: 'fix: the bug', repo: 'proj' }],
       })],
     });
     renderDryRun(data, false);

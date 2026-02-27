@@ -129,9 +129,9 @@ describe('formatHandoffPrompt', () => {
     });
 
     it('includes user profile section when userProfile is set', () => {
-      const result = formatHandoffPrompt(makeContext({ userProfile: 'Richard, backend dev' }));
+      const result = formatHandoffPrompt(makeContext({ userProfile: 'The user, backend dev' }));
       expect(result).toContain('═══ USER ═══');
-      expect(result).toContain('Richard, backend dev');
+      expect(result).toContain('The user, backend dev');
     });
 
     it('omits user profile section when userProfile is undefined', () => {
@@ -810,12 +810,12 @@ describe('buildHandoffContext', () => {
       typeof p === 'string' && p.includes('USER.md'),
     );
     mockReadFile.mockImplementation((p: unknown) => {
-      if (typeof p === 'string' && p.includes('USER.md')) return 'Richard, he/him, UTC';
+      if (typeof p === 'string' && p.includes('USER.md')) return 'The user, UTC';
       throw new Error('not found');
     });
 
     const ctx = await buildHandoffContext(CWD);
-    expect(ctx.userProfile).toBe('Richard, he/him, UTC');
+    expect(ctx.userProfile).toBe('The user, UTC');
   });
 
   it('includes previousResult when stored result is within 10-minute TTL', async () => {

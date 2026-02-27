@@ -548,11 +548,11 @@ describe('ContextPreparer — personality context', () => {
   });
 
   it('includes USER.md content in projectInstructions', async () => {
-    writeFileSync(join(TEST_MIA_HOME, 'USER.md'), 'Name: Richard\nTimezone: UTC');
+    writeFileSync(join(TEST_MIA_HOME, 'USER.md'), 'Name: The user\nTimezone: UTC');
     const cp = new ContextPreparer({ workingDirectory: TEST_CWD });
     const ctx = await cp.prepare('implement auth', 'conv-1');
     expect(ctx.projectInstructions).toContain('## User Profile');
-    expect(ctx.projectInstructions).toContain('Name: Richard');
+    expect(ctx.projectInstructions).toContain('Name: The user');
   });
 
   it('combines both PERSONALITY.md and USER.md', async () => {

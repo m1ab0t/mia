@@ -45,13 +45,13 @@ describe('loadWorkspaceFiles', () => {
 
   it('returns a single loaded file when only USER.md exists', async () => {
     mockReadFile
-      .mockResolvedValueOnce('I am Richard.' as unknown as Uint8Array) // USER.md
+      .mockResolvedValueOnce('I am the user.' as unknown as Uint8Array) // USER.md
       .mockRejectedValue(new Error('ENOENT'));                           // PROJECTS.md, NOTES.md
 
     const result = await loadWorkspaceFiles();
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('USER.md');
-    expect(result[0].content).toBe('I am Richard.');
+    expect(result[0].content).toBe('I am the user.');
     expect(result[0].truncated).toBe(false);
   });
 
@@ -146,7 +146,7 @@ describe('formatWorkspaceContext', () => {
   });
 
   it('includes the WORKSPACE CONTEXT header when files are present', () => {
-    const files = [{ name: 'USER.md', content: 'I am Richard.', truncated: false }];
+    const files = [{ name: 'USER.md', content: 'I am the user.', truncated: false }];
     expect(formatWorkspaceContext(files)).toContain('═══ WORKSPACE CONTEXT ═══');
   });
 

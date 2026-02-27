@@ -16,7 +16,6 @@
 
 import b4a from 'b4a';
 import type { Duplex } from 'stream';
-import { getErrorMessage } from '../utils/error-message';
 import { logger } from '../utils/logger';
 
 // ── Anonymous connection cap ──────────────────────────────────────────

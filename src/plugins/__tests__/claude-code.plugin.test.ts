@@ -649,7 +649,7 @@ describe('ClaudeCodePlugin', () => {
     });
 
     it('result message captures costUsd and turns in metadata', async () => {
-      const { promise, callbacks, proc } = await startDispatch();
+      const { promise, proc } = await startDispatch();
 
       proc.stdout.emit('data', ndjson({
         type: 'result',
@@ -667,7 +667,7 @@ describe('ClaudeCodePlugin', () => {
     });
 
     it('result message also accepts camelCase costUsd / numTurns', async () => {
-      const { promise, callbacks, proc } = await startDispatch();
+      const { promise, proc } = await startDispatch();
 
       proc.stdout.emit('data', ndjson({
         type: 'result',

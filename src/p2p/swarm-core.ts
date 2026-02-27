@@ -40,7 +40,6 @@ import {
   sendP2PMessage as _sendP2PMessage,
   registerPeerQueue,
   removePeerQueue,
-  writeToConn,
   recordDisconnect,
   getReconnectDelay,
   resetBackoff,

@@ -34,7 +34,7 @@
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { x, bold, dim, cyan, green, red, yellow, gray, DASH } from '../../utils/ansi.js';
+import { x, bold, dim, cyan, green, red, yellow, DASH } from '../../utils/ansi.js';
 import { dispatchToPlugin } from './dispatch.js';
 import { extractSection } from './parse-utils.js';
 import { MAX_LOG_CHARS_CHANGELOG as MAX_LOG_CHARS } from './config-constants.js';

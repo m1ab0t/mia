@@ -19,8 +19,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const { mockMemoryStore } = vi.hoisted(() => {
   const mockMemoryStore = {
-    getRecent: vi.fn<[], Promise<{ type: string; content: string }[]>>().mockResolvedValue([]),
-    search: vi.fn<[], Promise<{ content: string; score: number }[]>>().mockResolvedValue([]),
+    getRecent: vi.fn().mockResolvedValue([]),
+    search: vi.fn().mockResolvedValue([]),
   };
   return { mockMemoryStore };
 });
@@ -38,7 +38,7 @@ vi.mock('../utils/personality', () => ({
 }));
 
 vi.mock('../utils/workspace_context', () => ({
-  loadWorkspaceFiles: vi.fn().mockResolvedValue([{ name: 'USER.md', content: 'About Richard' }]),
+  loadWorkspaceFiles: vi.fn().mockResolvedValue([{ name: 'USER.md', content: 'About The user' }]),
   formatWorkspaceContext: vi.fn().mockReturnValue('WORKSPACE_CONTEXT'),
 }));
 
@@ -238,7 +238,7 @@ describe('ContextManager.searchTurnMemory()', () => {
 
   it('includes results at or above the relevance threshold', async () => {
     mockMemoryStore.search.mockResolvedValue([
-      { content: 'Richard uses OAuth for auth', score: 0.75 },
+      { content: 'The user uses OAuth for auth', score: 0.75 },
       { content: 'Project uses TypeScript', score: 0.5 },
     ]);
     const manager = makeManager();
@@ -246,7 +246,7 @@ describe('ContextManager.searchTurnMemory()', () => {
     await manager.searchTurnMemory('implement user authentication in the application');
 
     const prompt = manager.buildSystemPrompt([]);
-    expect(prompt).toContain('Richard uses OAuth for auth');
+    expect(prompt).toContain('The user uses OAuth for auth');
   });
 
   it('limits results to top 3 even when more pass the threshold', async () => {
@@ -364,22 +364,23 @@ describe('ContextManager.buildSystemPrompt()', () => {
   });
 
   it('includes workspace context when files are loaded', async () => {
-    mockFormatWorkspaceContext.mockReturnValue('## USER.md\nAbout Richard');
+    mockFormatWorkspaceContext.mockReturnValue('## USER.md\nAbout The user');
     const manager = makeManager('coding');
     await manager.init();
     const prompt = manager.buildSystemPrompt([]);
-    expect(prompt).toContain('About Richard');
+    expect(prompt).toContain('About The user');
   });
 
   it('includes memory facts in coding mode prompt', async () => {
-    mockMemoryStore.getRecent.mockResolvedValue([
-      { type: 'fact', content: 'Richard prefers concise commits' },
+    const mems: any = [
+      { type: 'fact', content: 'The user prefers concise commits' },
       { type: 'conversation', content: 'some conversation' }, // non-fact, should be excluded
-    ]);
+    ]
+    mockMemoryStore.getRecent.mockResolvedValue(mems);
     const manager = makeManager('coding');
     await manager.init();
     const prompt = manager.buildSystemPrompt([]);
-    expect(prompt).toContain('Richard prefers concise commits');
+    expect(prompt).toContain('The user prefers concise commits');
     expect(prompt).not.toContain('some conversation');
   });
 
@@ -416,8 +417,6 @@ describe('ContextManager.buildSystemPrompt()', () => {
     mockFormatToneForPrompt.mockReturnValue('');
     const manager = makeManager('coding');
     await manager.init();
-    const prompt = manager.buildSystemPrompt([]);
-    // formatToneForPrompt returning '' means no tone section added
     expect(mockFormatToneForPrompt).toHaveBeenCalledWith('neutral');
   });
 

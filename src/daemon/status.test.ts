@@ -235,7 +235,7 @@ describe('StatusManager — scheduler task count', () => {
         { id: '2', enabled: false },
         { id: '3', enabled: true },
       ]),
-    } as ReturnType<typeof getScheduler>);
+    } as unknown as ReturnType<typeof getScheduler>);
 
     const manager = new StatusManager(makeConfig(), makeMetrics());
     manager.start();
@@ -248,7 +248,7 @@ describe('StatusManager — scheduler task count', () => {
   it('reports zero when no tasks are scheduled', () => {
     (getScheduler as MockedFunction<typeof getScheduler>).mockReturnValue({
       list: vi.fn(() => []),
-    } as ReturnType<typeof getScheduler>);
+    } as unknown as ReturnType<typeof getScheduler>);
 
     const manager = new StatusManager(makeConfig(), makeMetrics());
     manager.start();

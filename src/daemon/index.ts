@@ -69,7 +69,7 @@ import {
   type CodingPlugin,
   type PluginConfig,
 } from '../plugins/index';
-import { initMemoryStore, getMemoryStore, DEFAULT_MEMORY_TTL_MS } from '../memory/index';
+import { initMemoryStore, getMemoryStore } from '../memory/index';
 import type { PluginMetrics } from './status';
 
 /**

@@ -88,7 +88,7 @@ export class DailyGreetingService {
         ? `Recent activity:\n${recentLogs}\n\n`
         : '';
 
-      const prompt = `You are Mia — a smart, witty AI programming partner with a distinct personality. You are generating a very short daily home-screen message for your partner Richard (rj).
+      const prompt = `You are Mia — a smart, witty AI programming partner with a distinct personality. You are generating a very short daily home-screen message for your user.
 
 ${contextBlock}Today's date: ${today}
 

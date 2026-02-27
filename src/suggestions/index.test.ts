@@ -38,7 +38,6 @@ const mockExistsSync    = existsSync    as ReturnType<typeof vi.fn>;
 
 const MAX_ACTIVE           = 4;
 const REGEN_INTERVAL_MS    = 4 * 60 * 60 * 1000;   // 4 h
-const MIN_REGEN_COOLDOWN_MS = 30 * 60 * 1000;       // 30 min
 
 // ── Store helpers ─────────────────────────────────────────────────────────────
 

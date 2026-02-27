@@ -5,7 +5,7 @@
  * and verifies markdown output (no ANSI codes).
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // ── Mocks ─────────────────────────────────────────────────────────────
 
@@ -200,7 +200,7 @@ vi.mock('./commands/config', () => ({
 
 import { parseSlashCommand, handleSlashCommand } from './slash-commands';
 
-// eslint-disable-next-line no-control-regex
+ 
 const ANSI_RE = /\x1b\[[0-9;]*m/;
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -320,6 +320,8 @@ describe('/usage', () => {
       successCount: 0,
       failCount: 0,
       byPlugin: {},
+      toolLatency: {},
+      topCommandsByTokens: [],
       toolFrequency: {},
       hourlyDispatches: Array(24).fill(0) as number[],
       dateRange: { from: '', to: '' },

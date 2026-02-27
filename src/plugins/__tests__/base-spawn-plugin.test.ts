@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { BaseSpawnPlugin, type BaseTaskInfo } from '../base-spawn-plugin.js';
-import { PluginError, PluginErrorCode } from '../types.js';
+import { PluginErrorCode } from '../types.js';
 import type {
   CodingPluginCallbacks,
   DispatchOptions,

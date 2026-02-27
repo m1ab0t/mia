@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
-import { join, basename } from 'path';
+import { join } from 'path';
 
 // ── Mock child_process so no real git subprocess is spawned ──────────────────
 

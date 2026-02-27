@@ -198,10 +198,6 @@ function ensureConversationsDir(): void {
   }
 }
 
-function conversationPath(id: string): string {
-  return join(CONVERSATIONS_DIR, `${id}.jsonl`);
-}
-
 /**
  * Load all messages from a conversation file.
  * Returns empty array if the file does not exist.
@@ -407,7 +403,6 @@ async function runTurn(
   cwd: string,
   noContext: boolean,
   plugin: import('../../plugins/types.js').CodingPlugin,
-  turnNumber: number
 ): Promise<{ output: string; failed: boolean }> {
   const context = await buildContext(prompt, conversationId, cwd, noContext);
 

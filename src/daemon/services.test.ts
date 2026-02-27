@@ -837,7 +837,7 @@ describe("handleAgentMessage — 'control_scheduler'", () => {
 
   it('list — sends scheduler_response with task list', async () => {
     const { child } = await setupReady();
-    const tasks = [{ id: 't1', name: 'nightly', cronExpression: '0 3 * * *', task: 'run tests', enabled: true, createdAt: 1, runCount: 5 }];
+    const tasks: any = [{ id: 't1', name: 'nightly', cronExpression: '0 3 * * *', task: 'run tests', enabled: true, createdAt: 1, runCount: 5 }];
     mockScheduler.list.mockReturnValue(tasks);
 
     pushMessage(child, { type: 'control_scheduler', requestId: 'r1', action: 'list' });
@@ -1116,8 +1116,6 @@ describe('spawnP2PSubAgent — process exit event', () => {
     child.emit('exit', 42, null);
     await new Promise(r => setImmediate(r));
 
-    const warnCall = (h.log as Mock).mock.calls.find(([level]) => level === 'warn' && (String(level[1]) || '').includes('exited') === false);
-    // find any warn after ready that contains '42'
     const exitLog = (h.log as Mock).mock.calls.find(([level, msg]) => level === 'warn' && String(msg).includes('42'));
     expect(exitLog).toBeDefined();
   });

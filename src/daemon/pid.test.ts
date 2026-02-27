@@ -18,8 +18,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, existsSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
-import { randomUUID } from 'crypto';
 
 // ── Temp dir setup ────────────────────────────────────────────────────────────
 // vi.hoisted() runs before vi.mock() factories — lets us reference testDir

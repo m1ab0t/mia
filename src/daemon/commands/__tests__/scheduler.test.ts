@@ -358,11 +358,11 @@ describe('saveScheduledTasks + loadScheduledTasks — round-trip', () => {
 // ── handleSchedulerCommand — 'list' ──────────────────────────────────────────
 
 describe('handleSchedulerCommand — list', () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let _exitSpy: ReturnType<typeof vi.spyOn>;
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    _exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 

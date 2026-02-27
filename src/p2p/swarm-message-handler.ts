@@ -303,7 +303,6 @@ export async function sendInitialSyncTo(
       })(),
     ]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const payload: Record<string, any> = { type: 'initial_sync' };
 
   if (convsResult.status === 'fulfilled' && convsResult.value) {

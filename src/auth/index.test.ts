@@ -15,7 +15,7 @@ import { join } from 'path';
 // We need to mock the paths module so the auth helpers write to a temp dir
 // instead of the real ~/.mia directory.
 let tmpDir = '';
-let tmpEnvFile = '';
+let _tmpEnvFile = '';
 
 vi.mock('../constants/paths', () => ({
   get MIA_DIR() { return tmpDir; },
@@ -33,7 +33,7 @@ let checkClaudeCli: typeof import('./index').checkClaudeCli;
 
 beforeEach(async () => {
   tmpDir = mkdtempSync(join(tmpdir(), 'mia-auth-test-'));
-  tmpEnvFile = join(tmpDir, '.env');
+  _tmpEnvFile = join(tmpDir, '.env');
 
   // Re-import fresh module so the MIA_DIR mock takes effect for ENV_FILE
   vi.resetModules();
