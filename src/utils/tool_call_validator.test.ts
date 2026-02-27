@@ -275,40 +275,6 @@ describe('Tool Call Validator', () => {
       });
     });
 
-    describe('web', () => {
-      it('should validate valid web search', () => {
-        const result = validateToolCall({
-          toolName: 'web',
-          params: { operation: 'search', query: 'typescript tips' },
-          recentToolCalls: [],
-          hasFailures: false,
-        });
-        expect(result.valid).toBe(true);
-      });
-
-      it('should require query for search', () => {
-        const result = validateToolCall({
-          toolName: 'web',
-          params: { operation: 'search' },
-          recentToolCalls: [],
-          hasFailures: false,
-        });
-        expect(result.valid).toBe(false);
-        expect(result.error).toContain('requires "query" parameter');
-      });
-
-      it('should require url for fetch', () => {
-        const result = validateToolCall({
-          toolName: 'web',
-          params: { operation: 'fetch' },
-          recentToolCalls: [],
-          hasFailures: false,
-        });
-        expect(result.valid).toBe(false);
-        expect(result.error).toContain('requires "url" parameter');
-      });
-    });
-
     describe('manage_config', () => {
       it('should validate valid config read', () => {
         const result = validateToolCall({

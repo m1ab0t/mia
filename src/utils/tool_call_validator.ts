@@ -72,9 +72,6 @@ export function validateToolCall(context: ToolCallContext): ToolCallValidationRe
     case 'scheduler':
       return validateScheduler(params);
 
-    case 'web':
-      return validateWeb(params);
-
     case 'manage_config':
       return validateManageConfig(params);
 
@@ -293,17 +290,6 @@ function validateScheduler(params: Record<string, unknown>): ToolCallValidationR
     schedule: 'requires "name", "task", and "cron" parameters',
   };
   return validateOperationBasedTool('scheduler', params, rules, messages);
-}
-
-function validateWeb(params: Record<string, unknown>): ToolCallValidationResult {
-  const rules: OperationValidationRules = {
-    validOperations: ['search', 'fetch'],
-    operationSpecificRules: {
-      search: { requiredParams: ['query'] },
-      fetch: { requiredParams: ['url'] },
-    },
-  };
-  return validateOperationBasedTool('web', params, rules);
 }
 
 function validateManageConfig(params: Record<string, unknown>): ToolCallValidationResult {
