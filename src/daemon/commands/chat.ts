@@ -937,7 +937,6 @@ export async function handleChatCommand(argv: string[]): Promise<void> {
           cwd,
           noContext,
           plugin,
-          turnNumber,
         );
 
         // Save assistant message
