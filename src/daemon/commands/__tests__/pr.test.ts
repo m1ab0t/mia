@@ -17,11 +17,11 @@ import {
   parsePrArgs,
   buildPrPrompt,
   extractPrContent,
-  parseDiffStats,
   detectBaseBranch,
   getBranchCommits,
   getBranchDiff,
 } from '../pr.js';
+import { parseDiffStats } from '../parse-utils.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // parsePrArgs

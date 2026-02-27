@@ -33,6 +33,7 @@ import { execFileSync } from 'child_process';
 import * as readline from 'readline';
 import { x, bold, dim, red, green, cyan, yellow, gray, DASH } from '../../utils/ansi.js';
 import { dispatchToPlugin } from './dispatch.js';
+import { parseDiffStats, type DiffStats } from './parse-utils.js';
 import { MAX_DIFF_CHARS, MAX_LOG_CHARS_PR as MAX_LOG_CHARS } from './config-constants.js';
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -187,24 +188,6 @@ export function getRemoteTrackingBranch(cwd: string): string | null {
 /** Push the current branch to origin. */
 export function pushBranch(cwd: string, branch: string): void {
   git(cwd, ['push', '--set-upstream', 'origin', branch]);
-}
-
-// ── Diff stats (reuse from commit pattern) ────────────────────────────────────
-
-export interface DiffStats {
-  added: number;
-  removed: number;
-  files: number;
-}
-
-/** Count +/- lines and files changed in a diff string. */
-export function parseDiffStats(diff: string): DiffStats {
-  const lines = diff.split('\n');
-  return {
-    added: lines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
-    removed: lines.filter(l => l.startsWith('-') && !l.startsWith('---')).length,
-    files: lines.filter(l => l.startsWith('diff --git')).length,
-  };
 }
 
 // ── Prompt building ───────────────────────────────────────────────────────────

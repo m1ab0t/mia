@@ -16,8 +16,8 @@ import {
   parseCommitArgs,
   buildCommitPrompt,
   extractCommitMessage,
-  parseDiffStats,
 } from '../commit.js';
+import { parseDiffStats } from '../parse-utils.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
 // parseCommitArgs
