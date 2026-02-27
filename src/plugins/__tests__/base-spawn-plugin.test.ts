@@ -992,4 +992,172 @@ describe('BaseSpawnPlugin', () => {
       expect(cb.onDone).toHaveBeenCalledTimes(1);
     });
   });
+
+  // ── Abort callback suppression ────────────────────────────────────────────
+
+  describe('abort callback suppression', () => {
+    it('does NOT fire onError when a task is intentionally aborted and process closes non-zero', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('abortable work', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      const proc = lastProcess!;
+      const taskId = [...plugin._activeConversations.values()][0];
+
+      // Abort → sets _killedTaskIds, sends SIGTERM
+      await plugin.abort(taskId);
+
+      // Process closes with non-zero exit (killed by signal)
+      proc.emit('close', 137); // SIGKILL exit code
+
+      const result = await p;
+
+      expect(result.success).toBe(false);
+      expect(result.output).toBe('Aborted');
+      // The critical assertion: onError must NOT have been called
+      expect(cb.onError).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fire onError when abort is followed by a spawn error event', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('crash work', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      const proc = lastProcess!;
+      const taskId = [...plugin._activeConversations.values()][0];
+
+      await plugin.abort(taskId);
+
+      // Spawn 'error' event fires after abort (e.g. EPERM on SIGTERM)
+      proc.emit('error', new Error('EPERM: operation not permitted'));
+
+      const result = await p;
+
+      expect(result.success).toBe(false);
+      expect(result.output).toBe('Aborted');
+      expect(cb.onError).not.toHaveBeenCalled();
+    });
+
+    it('still fires onError for non-aborted tasks that exit non-zero', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('crash', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      // Process crashes on its own — no abort() was called
+      lastProcess!.emit('close', 1);
+
+      const result = await p;
+
+      expect(result.success).toBe(false);
+      expect(cb.onError).toHaveBeenCalledTimes(1);
+      expect(cb.onError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: PluginErrorCode.PROCESS_EXIT }),
+        expect.any(String),
+      );
+    });
+
+    it('marks task status as killed (not error) when aborted', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('x', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      const taskId = [...plugin._activeConversations.values()][0];
+      await plugin.abort(taskId);
+
+      lastProcess!.emit('close', 137);
+      await p;
+
+      const task = plugin._tasks.get(taskId);
+      expect(task?.status).toBe('killed');
+    });
+  });
+
+  // ── Session poisoning prevention ──────────────────────────────────────────
+
+  describe('session poisoning prevention', () => {
+    it('does NOT mark session as completed when task errors', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('fail', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      // Simulate the plugin reporting a session ID
+      const taskId = [...plugin._activeConversations.values()][0];
+      const task = plugin._tasks.get(taskId)!;
+      task.sessionId = 'sess-poison';
+      plugin._conversationSessions.set(baseOptions.conversationId, 'sess-poison');
+
+      // Process exits with error
+      lastProcess!.emit('close', 1);
+      await p;
+
+      // Session should NOT be in completedSessions — it would cause resume loops
+      expect(plugin._completedSessions.has('sess-poison')).toBe(false);
+      // Session mapping should also be cleared so next dispatch starts fresh
+      expect(plugin._conversationSessions.has(baseOptions.conversationId)).toBe(false);
+    });
+
+    it('does NOT mark session as completed when task is killed', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('abortable', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      const taskId = [...plugin._activeConversations.values()][0];
+      const task = plugin._tasks.get(taskId)!;
+      task.sessionId = 'sess-killed';
+      plugin._conversationSessions.set(baseOptions.conversationId, 'sess-killed');
+
+      await plugin.abort(taskId);
+      lastProcess!.emit('close', 137);
+      await p;
+
+      expect(plugin._completedSessions.has('sess-killed')).toBe(false);
+      expect(plugin._conversationSessions.has(baseOptions.conversationId)).toBe(false);
+    });
+
+    it('still marks session as completed on successful task', async () => {
+      const cb = makeCallbacks();
+      const p = plugin.dispatch('success', mockContext, baseOptions, cb);
+      await Promise.resolve();
+
+      const taskId = [...plugin._activeConversations.values()][0];
+      const task = plugin._tasks.get(taskId)!;
+      task.sessionId = 'sess-good';
+      plugin._conversationSessions.set(baseOptions.conversationId, 'sess-good');
+
+      emitLine(lastProcess!, { type: 'done', result: 'done' });
+      lastProcess!.emit('close', 0);
+      await p;
+
+      expect(plugin._completedSessions.has('sess-good')).toBe(true);
+    });
+
+    it('next dispatch after error starts a fresh session (no --resume)', async () => {
+      // First dispatch fails
+      const cb1 = makeCallbacks();
+      const p1 = plugin.dispatch('fail', mockContext, baseOptions, cb1);
+      await Promise.resolve();
+
+      const taskId = [...plugin._activeConversations.values()][0];
+      const task = plugin._tasks.get(taskId)!;
+      task.sessionId = 'sess-dead';
+      plugin._conversationSessions.set(baseOptions.conversationId, 'sess-dead');
+
+      lastProcess!.emit('close', 1);
+      await p1;
+
+      // Session should be cleared
+      expect(plugin._completedSessions.has('sess-dead')).toBe(false);
+
+      // Second dispatch should NOT resume — args should not contain --resume
+      const cb2 = makeCallbacks();
+      const p2 = plugin.dispatch('retry', mockContext, baseOptions, cb2);
+      await Promise.resolve();
+
+      const spawnArgs = (spawn.mock.calls as unknown[][])[1][1] as string[];
+      expect(spawnArgs).not.toContain('--resume');
+
+      lastProcess!.emit('close', 0);
+      await p2;
+    });
+  });
 });

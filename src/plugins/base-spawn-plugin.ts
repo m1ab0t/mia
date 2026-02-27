@@ -128,6 +128,14 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
   protected tasks = new Map<string, BaseTaskInfo>();
   protected processes = new Map<string, ChildProcess>();
 
+  /**
+   * Task IDs that were intentionally killed via `abort()`.  Checked in the
+   * close/error handlers to suppress the `onError` callback — callers that
+   * call `abort()` already know the task is going away and do not expect an
+   * error notification.  Mirrors the pattern used by OpenCodePlugin.
+   */
+  private _killedTaskIds = new Set<string>();
+
   private _completionCount = 0;
 
   // Conversation → session continuity tracking
@@ -203,6 +211,7 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
 
   async shutdown(): Promise<void> {
     this.abortAll();
+    this._killedTaskIds.clear();
   }
 
   async isAvailable(): Promise<boolean> {
@@ -535,13 +544,18 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
       clearInterval(stallTimer);
       this.processes.delete(taskId);
 
+      // Check if this was an intentional abort — if so, suppress onError.
+      const wasKilled = this._killedTaskIds.delete(taskId);
+
       // Flush any remaining buffered content through the parser
       parser.flush();
 
       const task = this.tasks.get(taskId);
       if (task && task.status === 'running') {
         // Process closed without emitting a terminal message — infer status from exit code.
-        if (code === 0) {
+        if (wasKilled) {
+          task.status = 'killed';
+        } else if (code === 0) {
           task.status = 'completed';
         } else {
           task.status = 'error';
@@ -558,6 +572,9 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
         if (task.status === 'error') {
           this._emitErrorCallback(task, callbacks, new PluginError(task.error!, PluginErrorCode.PROCESS_EXIT, this.name));
           resolve({ taskId, success: false, output: task.error!, durationMs: task.durationMs });
+        } else if (task.status === 'killed') {
+          // Intentional abort — resolve without firing onError.
+          resolve({ taskId, success: false, output: 'Aborted', durationMs: task.durationMs });
         } else {
           const output = task.result ?? '';
           this._emitDoneCallback(task, callbacks, output);
@@ -570,14 +587,20 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
           });
         }
       } else if (task) {
-        // Already resolved (e.g. via a terminal message in _handleMessage).
-        resolve({
-          taskId,
-          success: task.status === 'completed',
-          output: task.result ?? task.error ?? task.resultBuffer ?? '',
-          durationMs: task.durationMs ?? 0,
-          metadata: task.metadata,
-        });
+        // Already resolved (e.g. via a terminal message in _handleMessage)
+        // or already marked as 'killed' by _kill().
+        // Suppress onError for killed tasks that were already finalised.
+        if (task.status === 'killed' && wasKilled) {
+          resolve({ taskId, success: false, output: 'Aborted', durationMs: task.durationMs ?? 0 });
+        } else {
+          resolve({
+            taskId,
+            success: task.status === 'completed',
+            output: task.result ?? task.error ?? task.resultBuffer ?? '',
+            durationMs: task.durationMs ?? 0,
+            metadata: task.metadata,
+          });
+        }
       }
 
       this._onTaskFinished(taskId);
@@ -601,18 +624,24 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
       clearInterval(stallTimer);
       this.processes.delete(taskId);
 
+      const wasKilled = this._killedTaskIds.delete(taskId);
+
       const task = this.tasks.get(taskId);
       if (task) {
-        task.status = 'error';
+        task.status = wasKilled ? 'killed' : 'error';
         task.completedAt = Date.now();
         task.durationMs = task.completedAt - task.startedAt;
-        task.error = getErrorMessage(err);
+        if (!wasKilled) task.error = getErrorMessage(err);
       }
-      this._emitErrorCallback(task ?? null, callbacks, new PluginError(getErrorMessage(err), PluginErrorCode.SPAWN_FAILURE, this.name, err));
+
+      // Suppress onError for intentional aborts.
+      if (!wasKilled) {
+        this._emitErrorCallback(task ?? null, callbacks, new PluginError(getErrorMessage(err), PluginErrorCode.SPAWN_FAILURE, this.name, err));
+      }
       resolve({
         taskId,
         success: false,
-        output: getErrorMessage(err),
+        output: wasKilled ? 'Aborted' : getErrorMessage(err),
         durationMs: task?.durationMs ?? 0,
       });
 
@@ -692,8 +721,16 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     const sessionId = task.sessionId ?? this.conversationSessions.get(conversationId);
 
     // Mark session as completed so the next dispatch can resume it.
-    if (sessionId && (task.status === 'completed' || task.status === 'error')) {
+    // Errored sessions are NOT marked as completed — resuming a poisoned
+    // session (e.g. auth failure, provider error) would likely fail again
+    // with the same error, creating an infinite retry loop.  Killed sessions
+    // are also excluded since the conversation was intentionally aborted.
+    if (sessionId && task.status === 'completed') {
       this.completedSessions.add(sessionId);
+    } else if (sessionId && (task.status === 'error' || task.status === 'killed')) {
+      // Actively remove the session so the next dispatch starts fresh.
+      this.completedSessions.delete(sessionId);
+      this.conversationSessions.delete(conversationId);
     }
 
     // Vacate the active slot for this conversation.
@@ -736,6 +773,9 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
   protected _kill(taskId: string): void {
     const child = this.processes.get(taskId);
     if (!child) return;
+
+    // Mark as intentionally killed so close/error handlers suppress onError.
+    this._killedTaskIds.add(taskId);
 
     child.kill('SIGTERM');
 
