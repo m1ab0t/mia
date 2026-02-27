@@ -918,6 +918,11 @@ async function handleConnMessage(
         };
         textMessage = typeof raw.text === 'string' ? raw.text : 'Describe this image';
         logger.debug(`[P2P] Image attachment detected (${image.mimeType}, ${(image.data.length / 1024).toFixed(0)}KB base64)`);
+      } else if (typeof raw.text === 'string') {
+        // JSON-wrapped plain text from mobile worklet — unwrap the text.
+        // The mobile worklet wraps user messages as { text: "..." } to
+        // prevent embedded newlines from breaking NDJSON framing.
+        textMessage = raw.text;
       }
     } catch {
       // Not JSON — treat as plain text user message
