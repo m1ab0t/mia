@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { aggregate, loadTraces, getTargetDates } from './usage.js';
+import { aggregate, loadTraces, getTargetDates, parseUsageArgs } from './usage.js';
 
 // ── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -604,6 +604,66 @@ describe('aggregate', () => {
     it('uses "unknown" as plugin name when plugin field is empty string', () => {
       const rec = makeRecord({ plugin: '' });
       expect(Object.keys(aggregate([rec]).byPlugin)).toContain('unknown');
+    });
+  });
+});
+
+// ── parseUsageArgs ──────────────────────────────────────────────────────────
+
+describe('parseUsageArgs', () => {
+  describe('string input (backward-compatible)', () => {
+    it("defaults to 'today' window", () => {
+      expect(parseUsageArgs('today').window).toBe('today');
+    });
+
+    it("parses 'week' window", () => {
+      expect(parseUsageArgs('week').window).toBe('week');
+    });
+
+    it("parses 'all' window", () => {
+      expect(parseUsageArgs('all').window).toBe('all');
+    });
+
+    it('defaults json to false for string input', () => {
+      expect(parseUsageArgs('today').json).toBe(false);
+    });
+
+    it('treats unknown string as today', () => {
+      expect(parseUsageArgs('something').window).toBe('today');
+    });
+  });
+
+  describe('array input (new form)', () => {
+    it("parses ['week'] correctly", () => {
+      expect(parseUsageArgs(['week']).window).toBe('week');
+    });
+
+    it("parses ['all', '--json']", () => {
+      const args = parseUsageArgs(['all', '--json']);
+      expect(args.window).toBe('all');
+      expect(args.json).toBe(true);
+    });
+
+    it("parses ['--json'] alone (defaults to today)", () => {
+      const args = parseUsageArgs(['--json']);
+      expect(args.window).toBe('today');
+      expect(args.json).toBe(true);
+    });
+
+    it("parses ['--json', 'week'] regardless of order", () => {
+      const args = parseUsageArgs(['--json', 'week']);
+      expect(args.window).toBe('week');
+      expect(args.json).toBe(true);
+    });
+
+    it('returns json=false when --json not present', () => {
+      expect(parseUsageArgs(['week']).json).toBe(false);
+    });
+
+    it('handles empty array as today/no-json', () => {
+      const args = parseUsageArgs([]);
+      expect(args.window).toBe('today');
+      expect(args.json).toBe(false);
     });
   });
 });

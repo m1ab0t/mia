@@ -93,6 +93,7 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
   ${c}today${x}   ${d}·${x} dispatches, duration, tools used today
   ${c}week${x}    ${d}·${x} last 7 days of activity
   ${c}all${x}     ${d}·${x} all available trace history
+  ${c}--json${x}  ${d}·${x} machine-readable JSON  ${d}mia usage week --json${x}
 
   ${c}run${x}     ${d}·${x} run a command and auto-fix failures
   ${c}watch${x}   ${d}·${x} watch files and auto-dispatch on changes
@@ -102,6 +103,7 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
   ${c}--n${x}     ${d}·${x} number of entries     ${d}mia log --n 50${x}
   ${c}--failed${x} ${d}·${x} only failed dispatches
   ${c}--conv${x}  ${d}·${x} filter by conversation  ${d}mia log --conv chat-20240115-abc${x}
+  ${c}--json${x}  ${d}·${x} machine-readable JSON  ${d}mia log --json | jq '.[] | .prompt'${x}
 
   ${d}fix flags${x}
   ${c}--max-retries${x} ${d}·${x} max fix cycles     ${d}mia fix --max-retries 3 "npm test"${x}
@@ -351,7 +353,7 @@ if (command === 'setup') {
     p2p:       () => h.handleP2PCommand(subCommand || 'status'),
     plugin:    () => h.handlePluginCommand(subCommand || 'test'),
     scheduler: () => h.handleSchedulerCommand(subCommand || 'list'),
-    usage:     () => h.handleUsageCommand(subCommand || 'today'),
+    usage:     () => h.handleUsageCommand(args.length > 0 ? args : [subCommand || 'today']),
     ask:       () => h.handleAskCommand(args),
     chat:      () => h.handleChatCommand(args),
     memory:    () => h.handleMemoryCommand(args),

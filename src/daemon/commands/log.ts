@@ -1,5 +1,5 @@
 /**
- * log — `mia log [--n <count>] [--failed] [--conversation <id>]`
+ * log — `mia log [--n <count>] [--failed] [--conversation <id>] [--json]`
  *
  * Shows a reverse-chronological list of recent plugin dispatches, parsed from
  * the NDJSON trace files in ~/.mia/traces/.  Each entry displays:
@@ -17,6 +17,7 @@
  *   mia log --failed                 # only failed dispatches
  *   mia log --conversation <id>      # filter by conversation ID
  *   mia log --full                   # include full output for each entry
+ *   mia log --json                   # machine-readable JSON output
  */
 
 import { existsSync, readdirSync, readFileSync } from 'fs';
@@ -65,6 +66,21 @@ export interface LogArgs {
   schedulerOnly: boolean;
   conversationId: string | null;
   full: boolean;
+  json: boolean;
+}
+
+/** Serialisable log entry emitted by `--json` mode. */
+export interface LogJsonEntry {
+  traceId: string;
+  timestamp: string;
+  plugin: string;
+  conversationId: string;
+  success: boolean;
+  durationMs: number;
+  prompt: string;
+  toolCalls: Record<string, number>;
+  gitChanges: { files: string[]; newCommits: string[] } | null;
+  output: string | null;
 }
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
@@ -79,6 +95,7 @@ export function parseLogArgs(argv: string[]): LogArgs {
   let schedulerOnly = false;
   let conversationId: string | null = null;
   let full = false;
+  let json = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -93,10 +110,12 @@ export function parseLogArgs(argv: string[]): LogArgs {
       conversationId = argv[++i];
     } else if (arg === '--full') {
       full = true;
+    } else if (arg === '--json') {
+      json = true;
     }
   }
 
-  return { count, failedOnly, schedulerOnly, conversationId, full };
+  return { count, failedOnly, schedulerOnly, conversationId, full, json };
 }
 
 // ── Trace loading ─────────────────────────────────────────────────────────────
@@ -225,6 +244,42 @@ export function extractToolCalls(events: TraceEvent[] = []): Map<string, number>
   return counts;
 }
 
+// ── JSON output ───────────────────────────────────────────────────────────────
+
+/**
+ * Convert a raw TraceRecord into a clean, serialisable LogJsonEntry.
+ * Exported for testing.
+ */
+export function toJsonEntry(rec: TraceRecord): LogJsonEntry {
+  const toolCounts = extractToolCalls(rec.events);
+  const toolObj: Record<string, number> = {};
+  for (const [name, count] of toolCounts) {
+    toolObj[name] = count;
+  }
+
+  const gitChanges = rec.result?.metadata?.gitChanges as GitChanges | undefined;
+
+  return {
+    traceId: rec.traceId,
+    timestamp: rec.timestamp,
+    plugin: rec.plugin,
+    conversationId: rec.conversationId,
+    success: rec.result?.success !== false,
+    durationMs: rec.result?.durationMs ?? rec.durationMs ?? 0,
+    prompt: (rec.prompt ?? '').replace(/\n/g, ' ').trim(),
+    toolCalls: toolObj,
+    gitChanges: gitChanges
+      ? { files: gitChanges.files, newCommits: gitChanges.newCommits }
+      : null,
+    output: rec.result?.output?.trim() || null,
+  };
+}
+
+function renderJson(records: TraceRecord[]): void {
+  const entries = records.map(toJsonEntry);
+  console.log(JSON.stringify(entries, null, 2));
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 function renderEntry(rec: TraceRecord, full: boolean): void {
@@ -306,6 +361,10 @@ export async function handleLogCommand(argv: string[]): Promise<void> {
   const args = parseLogArgs(argv);
 
   if (!existsSync(TRACES_DIR)) {
+    if (args.json) {
+      console.log('[]');
+      return;
+    }
     console.log('');
     console.log(`  ${bold}log${x}`);
     console.log(`  ${DASH}`);
@@ -318,6 +377,13 @@ export async function handleLogCommand(argv: string[]): Promise<void> {
   const all = loadAllTraces();
   const records = filterTraces(all, args);
 
+  // ── JSON output ──────────────────────────────────────────────────────────
+  if (args.json) {
+    renderJson(records);
+    return;
+  }
+
+  // ── ANSI output ──────────────────────────────────────────────────────────
   // Header
   const filters: string[] = [];
   if (args.failedOnly) filters.push('failed only');
