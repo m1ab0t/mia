@@ -38,6 +38,7 @@ import {
 } from './message-store';
 import {
   parseMobileInbound,
+  type MobileInbound,
   type ImageAttachment,
   type PluginInfo,
   type ScheduledTaskInfo,
@@ -636,6 +637,178 @@ async function handleDeleteMultipleConversations(
   }
 }
 
+// ── Control message dispatch table ────────────────────────────────────
+//
+// Each entry maps a MobileInbound `type` to a handler function.  Adding
+// new control message types is now declarative: add a validator in
+// ipc-types.ts and a handler here — no if/else chain to extend.
+//
+// The handler signature uses the full MobileInbound union; callers narrow
+// via the table lookup which guarantees the correct variant.
+
+type ControlHandler = (
+  conn: Duplex,
+  msg: MobileInbound,
+  ctx: MessageHandlerContext,
+) => Promise<void>;
+
+const controlHandlers: Partial<Record<MobileInbound['type'], ControlHandler>> = {
+  // ── Conversation management ───────────────────────────────────────
+  history_request: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'history_request' }>;
+    await handleHistoryRequest(conn, m.conversationId, m.before, m.limit, ctx);
+  },
+  conversations_request: async (conn, _msg, ctx) => {
+    await sendConversationListTo(conn, ctx);
+  },
+  load_conversation: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'load_conversation' }>;
+    if (ctx.getCurrentConversationId() !== m.conversationId) {
+      const loadCb = ctx.getLoadConversationCallback();
+      if (loadCb) await loadCb(m.conversationId);
+    }
+    ctx.setCurrentConversationId(m.conversationId);
+    await replayHistory(conn, ctx);
+  },
+  new_conversation: async (conn, _msg, ctx) => {
+    await handleNewConversation(conn, ctx);
+  },
+  rename_conversation: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'rename_conversation' }>;
+    await handleRenameConversation(conn, m.conversationId, m.title, ctx);
+  },
+  delete_conversation: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'delete_conversation' }>;
+    await handleDeleteConversation(conn, m.conversationId, ctx);
+  },
+  delete_all_conversations: async (conn, _msg, ctx) => {
+    await handleDeleteAllConversations(conn, ctx);
+  },
+  delete_multiple_conversations: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'delete_multiple_conversations' }>;
+    await handleDeleteMultipleConversations(conn, m.conversationIds, ctx);
+  },
+
+  // ── Plugins ───────────────────────────────────────────────────────
+  plugins_request: async (conn, _msg, ctx) => {
+    await sendPluginsListTo(conn, ctx);
+  },
+  plugin_switch: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'plugin_switch' }>;
+    try {
+      const switchCb = ctx.getSwitchPluginCallback();
+      if (switchCb) {
+        const result = switchCb(m.name);
+        if (result.success) {
+          sendToAll({ type: 'plugin_switched', activePlugin: m.name });
+        } else {
+          writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: result.error }) + '\n'));
+        }
+        logger.debug(`[P2P] Plugin switch to '${m.name}': ${result.success ? 'ok' : result.error}`);
+      }
+    } catch (err: unknown) {
+      logger.error({ err }, '[P2P] Plugin switch failed');
+      writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: getErrorMessage(err) }) + '\n'));
+    }
+  },
+
+  // ── Scheduler ─────────────────────────────────────────────────────
+  scheduler_list_request: async (conn, _msg, ctx) => {
+    await sendSchedulerTasksTo(conn, { action: 'list' }, ctx);
+  },
+  scheduler_toggle: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'scheduler_toggle' }>;
+    await sendSchedulerTasksTo(conn, { action: 'toggle', id: m.id }, ctx);
+  },
+  scheduler_delete: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'scheduler_delete' }>;
+    await sendSchedulerTasksTo(conn, { action: 'delete', id: m.id }, ctx);
+  },
+  scheduler_run: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'scheduler_run' }>;
+    await sendSchedulerTasksTo(conn, { action: 'run', id: m.id }, ctx);
+  },
+  scheduler_create: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'scheduler_create' }>;
+    await sendSchedulerTasksTo(conn, {
+      action: 'create',
+      name: m.name,
+      cronExpression: m.cronExpression,
+      taskPrompt: m.taskPrompt,
+      ...(m.timeoutMs !== undefined && { timeoutMs: m.timeoutMs }),
+    }, ctx);
+  },
+  scheduler_update: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'scheduler_update' }>;
+    await sendSchedulerTasksTo(conn, {
+      action: 'update',
+      id: m.id,
+      taskPrompt: m.taskPrompt,
+      ...(m.cronExpression !== undefined && { cronExpression: m.cronExpression }),
+      ...(m.timeoutMs !== undefined && { timeoutMs: m.timeoutMs }),
+    }, ctx);
+  },
+
+  // ── Search ────────────────────────────────────────────────────────
+  search_request: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'search_request' }>;
+    await handleSearchRequest(conn, m.query, m.requestId, ctx);
+  },
+
+  // ── Server lifecycle ──────────────────────────────────────────────
+  restart_request: async (_conn, _msg, ctx) => {
+    await handleRestartRequest(ctx);
+  },
+
+  // ── Suggestions ───────────────────────────────────────────────────
+  suggestions_request: async (conn, _msg, ctx) => {
+    await sendSuggestionsTo(conn, { action: 'get' }, ctx);
+  },
+  suggestions_refresh: async (_conn, _msg, ctx) => {
+    ctx.setSuggestionsGenerating(true);
+    sendToAll({ type: 'suggestions_generating' });
+    // Trigger generation without sending an intermediate response.
+    // The daemon fires svc.generate() in the background and returns the
+    // current (stale) list immediately — writing that stale list to the
+    // peer would prematurely reset isGeneratingSuggestions on the client.
+    // Instead we discard the immediate return value; broadcastSuggestions()
+    // will deliver the real results (and reset suggestionsGenerating) once
+    // generation actually completes.
+    const cb = ctx.getSuggestionsActionCallback();
+    if (cb) {
+      cb({ action: 'generate' })
+        .catch((err: unknown) => { logger.debug({ err }, '[P2P] suggestions_refresh generation failed'); });
+    } else {
+      ctx.setSuggestionsGenerating(false);
+    }
+  },
+  suggestion_dismiss: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'suggestion_dismiss' }>;
+    await sendSuggestionsTo(conn, { action: 'dismiss', id: m.id }, ctx);
+  },
+  suggestion_complete: async (conn, msg, ctx) => {
+    const m = msg as Extract<MobileInbound, { type: 'suggestion_complete' }>;
+    await sendSuggestionsTo(conn, { action: 'complete', id: m.id }, ctx);
+  },
+
+  // ── Daily greeting ────────────────────────────────────────────────
+  daily_greeting_request: async (conn, _msg, ctx) => {
+    await sendDailyGreetingTo(conn, ctx);
+  },
+};
+
+// ── Outbound echo guard ─────────────────────────────────────────────
+// Daemon-to-peer message types that should never be processed as inbound
+// control messages (echo / reflection bug).
+
+const OUTBOUND_TYPES = new Set<string>([
+  'response', 'raw_token', 'chat_message', 'tool_call', 'tool_result',
+  'thinking', 'token_usage', 'route_info', 'bash_stream',
+  'history', 'conversations', 'plugins', 'plugin_switched',
+  'scheduler_tasks', 'error', 'server_restarting', 'search_results',
+  'suggestions', 'task_status',
+]);
+
 // ── Main per-connection message dispatcher ────────────────────────────
 
 /**
@@ -713,164 +886,19 @@ async function handleConnMessage(
 
   logger.debug(`P2P received: ${message.substring(0, 200)}${message.length > 200 ? '...' : ''}`);
 
-  // ── 3. Parse as a typed control message ───────────────────────────────
+  // ── 3. Dispatch typed control messages via lookup table ────────────────
   const parsed = parseMobileInbound(message);
 
   if (parsed !== null) {
-    // Guard: drop daemon-to-peer outbound types that arrive from a peer
-    // (echo / reflection bug — never dispatch them to the AI).
-    const OUTBOUND_TYPES = new Set<string>([
-      'response', 'raw_token', 'chat_message', 'tool_call', 'tool_result',
-      'thinking', 'token_usage', 'route_info', 'bash_stream',
-      'history', 'conversations', 'plugins', 'plugin_switched',
-      'scheduler_tasks', 'error', 'server_restarting', 'search_results',
-      'suggestions', 'task_status',
-    ]);
     if (OUTBOUND_TYPES.has(parsed.type)) {
       logger.debug(`[P2P] Dropped echoed outbound message type '${parsed.type}' from peer`);
       return;
     }
-
-    if (parsed.type === 'history_request') {
-      await handleHistoryRequest(conn, parsed.conversationId, parsed.before, parsed.limit, ctx);
+    const handler = controlHandlers[parsed.type];
+    if (handler) {
+      await handler(conn, parsed, ctx);
       return;
     }
-    if (parsed.type === 'conversations_request') {
-      await sendConversationListTo(conn, ctx);
-      return;
-    }
-    if (parsed.type === 'load_conversation') {
-      const isSameConversation = ctx.getCurrentConversationId() === parsed.conversationId;
-      if (!isSameConversation) {
-        const loadCb = ctx.getLoadConversationCallback();
-        if (loadCb) await loadCb(parsed.conversationId);
-      }
-      ctx.setCurrentConversationId(parsed.conversationId);
-      await replayHistory(conn, ctx);
-      return;
-    }
-    if (parsed.type === 'new_conversation') {
-      await handleNewConversation(conn, ctx);
-      return;
-    }
-    if (parsed.type === 'rename_conversation') {
-      await handleRenameConversation(conn, parsed.conversationId, parsed.title, ctx);
-      return;
-    }
-    if (parsed.type === 'delete_conversation') {
-      await handleDeleteConversation(conn, parsed.conversationId, ctx);
-      return;
-    }
-    if (parsed.type === 'delete_all_conversations') {
-      await handleDeleteAllConversations(conn, ctx);
-      return;
-    }
-    if (parsed.type === 'delete_multiple_conversations') {
-      await handleDeleteMultipleConversations(conn, parsed.conversationIds, ctx);
-      return;
-    }
-    if (parsed.type === 'plugins_request') {
-      await sendPluginsListTo(conn, ctx);
-      return;
-    }
-    if (parsed.type === 'plugin_switch') {
-      try {
-        const switchCb = ctx.getSwitchPluginCallback();
-        if (switchCb) {
-          const result = switchCb(parsed.name);
-          if (result.success) {
-            sendToAll({ type: 'plugin_switched', activePlugin: parsed.name });
-          } else {
-            writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: result.error }) + '\n'));
-          }
-          logger.debug(`[P2P] Plugin switch to '${parsed.name}': ${result.success ? 'ok' : result.error}`);
-        }
-      } catch (err: unknown) {
-        logger.error({ err }, '[P2P] Plugin switch failed');
-        writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: getErrorMessage(err) }) + '\n'));
-      }
-      return;
-    }
-    if (parsed.type === 'scheduler_list_request') {
-      await sendSchedulerTasksTo(conn, { action: 'list' }, ctx);
-      return;
-    }
-    if (parsed.type === 'scheduler_toggle') {
-      await sendSchedulerTasksTo(conn, { action: 'toggle', id: parsed.id }, ctx);
-      return;
-    }
-    if (parsed.type === 'scheduler_delete') {
-      await sendSchedulerTasksTo(conn, { action: 'delete', id: parsed.id }, ctx);
-      return;
-    }
-    if (parsed.type === 'scheduler_run') {
-      await sendSchedulerTasksTo(conn, { action: 'run', id: parsed.id }, ctx);
-      return;
-    }
-    if (parsed.type === 'scheduler_create') {
-      await sendSchedulerTasksTo(conn, {
-        action: 'create',
-        name: parsed.name,
-        cronExpression: parsed.cronExpression,
-        taskPrompt: parsed.taskPrompt,
-        ...(parsed.timeoutMs !== undefined && { timeoutMs: parsed.timeoutMs }),
-      }, ctx);
-      return;
-    }
-    if (parsed.type === 'scheduler_update') {
-      await sendSchedulerTasksTo(conn, {
-        action: 'update',
-        id: parsed.id,
-        taskPrompt: parsed.taskPrompt,
-        ...(parsed.cronExpression !== undefined && { cronExpression: parsed.cronExpression }),
-        ...(parsed.timeoutMs !== undefined && { timeoutMs: parsed.timeoutMs }),
-      }, ctx);
-      return;
-    }
-    if (parsed.type === 'search_request') {
-      await handleSearchRequest(conn, parsed.query, parsed.requestId, ctx);
-      return;
-    }
-    if (parsed.type === 'restart_request') {
-      await handleRestartRequest(ctx);
-      return;
-    }
-    if (parsed.type === 'suggestions_request') {
-      await sendSuggestionsTo(conn, { action: 'get' }, ctx);
-      return;
-    }
-    if (parsed.type === 'suggestions_refresh') {
-      ctx.setSuggestionsGenerating(true);
-      sendToAll({ type: 'suggestions_generating' });
-      // Trigger generation without sending an intermediate response.
-      // The daemon fires svc.generate() in the background and returns the
-      // current (stale) list immediately — writing that stale list to the
-      // peer would prematurely reset isGeneratingSuggestions on the client.
-      // Instead we discard the immediate return value; broadcastSuggestions()
-      // will deliver the real results (and reset suggestionsGenerating) once
-      // generation actually completes.
-      const cb = ctx.getSuggestionsActionCallback();
-      if (cb) {
-        cb({ action: 'generate' })
-          .catch((err: unknown) => { logger.debug({ err }, '[P2P] suggestions_refresh generation failed'); });
-      } else {
-        ctx.setSuggestionsGenerating(false);
-      }
-      return;
-    }
-    if (parsed.type === 'suggestion_dismiss') {
-      await sendSuggestionsTo(conn, { action: 'dismiss', id: parsed.id }, ctx);
-      return;
-    }
-    if (parsed.type === 'suggestion_complete') {
-      await sendSuggestionsTo(conn, { action: 'complete', id: parsed.id }, ctx);
-      return;
-    }
-    if (parsed.type === 'daily_greeting_request') {
-      await sendDailyGreetingTo(conn, ctx);
-      return;
-    }
-
     // Unknown typed message — fall through to AI handler as plain text.
   }
 
