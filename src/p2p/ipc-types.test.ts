@@ -25,7 +25,12 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses history_request with required fields', () => {
-    const msg = { type: 'history_request', conversationId: 'conv-1', before: 1000, limit: 50 };
+    const msg = {
+      type: 'history_request',
+      conversationId: 'conv-1',
+      before: 1000,
+      limit: 50,
+    };
     const result = parseMobileInbound(JSON.stringify(msg));
     expect(result).not.toBeNull();
     expect(result!.type).toBe('history_request');
@@ -37,7 +42,9 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses conversations_request', () => {
-    const result = parseMobileInbound(JSON.stringify({ type: 'conversations_request' }));
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'conversations_request' }),
+    );
     expect(result?.type).toBe('conversations_request');
   });
 
@@ -51,12 +58,18 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses new_conversation', () => {
-    const result = parseMobileInbound(JSON.stringify({ type: 'new_conversation' }));
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'new_conversation' }),
+    );
     expect(result?.type).toBe('new_conversation');
   });
 
   it('parses rename_conversation with both required fields', () => {
-    const msg = { type: 'rename_conversation', conversationId: 'c1', title: 'My Chat' };
+    const msg = {
+      type: 'rename_conversation',
+      conversationId: 'c1',
+      title: 'My Chat',
+    };
     const result = parseMobileInbound(JSON.stringify(msg));
     expect(result?.type).toBe('rename_conversation');
     if (result?.type === 'rename_conversation') {
@@ -75,12 +88,17 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses delete_all_conversations', () => {
-    const result = parseMobileInbound(JSON.stringify({ type: 'delete_all_conversations' }));
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'delete_all_conversations' }),
+    );
     expect(result?.type).toBe('delete_all_conversations');
   });
 
   it('parses delete_multiple_conversations with id array', () => {
-    const msg = { type: 'delete_multiple_conversations', conversationIds: ['a', 'b', 'c'] };
+    const msg = {
+      type: 'delete_multiple_conversations',
+      conversationIds: ['a', 'b', 'c'],
+    };
     const result = parseMobileInbound(JSON.stringify(msg));
     expect(result?.type).toBe('delete_multiple_conversations');
     if (result?.type === 'delete_multiple_conversations') {
@@ -89,7 +107,9 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses plugins_request', () => {
-    expect(parseMobileInbound(JSON.stringify({ type: 'plugins_request' }))?.type).toBe('plugins_request');
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'plugins_request' }))?.type,
+    ).toBe('plugins_request');
   });
 
   it('parses plugin_switch with name', () => {
@@ -102,24 +122,32 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses scheduler_list_request', () => {
-    expect(parseMobileInbound(JSON.stringify({ type: 'scheduler_list_request' }))?.type)
-      .toBe('scheduler_list_request');
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'scheduler_list_request' }))
+        ?.type,
+    ).toBe('scheduler_list_request');
   });
 
   it('parses scheduler_toggle with id', () => {
-    const result = parseMobileInbound(JSON.stringify({ type: 'scheduler_toggle', id: 'task-1' }));
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'scheduler_toggle', id: 'task-1' }),
+    );
     expect(result?.type).toBe('scheduler_toggle');
     if (result?.type === 'scheduler_toggle') expect(result.id).toBe('task-1');
   });
 
   it('parses scheduler_delete with id', () => {
-    const result = parseMobileInbound(JSON.stringify({ type: 'scheduler_delete', id: 'task-2' }));
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'scheduler_delete', id: 'task-2' }),
+    );
     expect(result?.type).toBe('scheduler_delete');
     if (result?.type === 'scheduler_delete') expect(result.id).toBe('task-2');
   });
 
   it('parses scheduler_run with id', () => {
-    const result = parseMobileInbound(JSON.stringify({ type: 'scheduler_run', id: 'task-3' }));
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'scheduler_run', id: 'task-3' }),
+    );
     expect(result?.type).toBe('scheduler_run');
     if (result?.type === 'scheduler_run') expect(result.id).toBe('task-3');
   });
@@ -156,7 +184,11 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses scheduler_update with required fields', () => {
-    const msg = { type: 'scheduler_update', id: 'task-99', taskPrompt: 'Updated prompt' };
+    const msg = {
+      type: 'scheduler_update',
+      id: 'task-99',
+      taskPrompt: 'Updated prompt',
+    };
     const result = parseMobileInbound(JSON.stringify(msg));
     expect(result?.type).toBe('scheduler_update');
     if (result?.type === 'scheduler_update') {
@@ -165,8 +197,29 @@ describe('parseMobileInbound — known control types', () => {
     }
   });
 
+  it('parses scheduler_update with all optional fields', () => {
+    const msg = {
+      type: 'scheduler_update',
+      id: 'task-1',
+      taskPrompt: 'p',
+      name: 'renamed',
+      cronExpression: '0 0 * * *',
+      timeoutMs: 5000,
+    };
+    const result = parseMobileInbound(JSON.stringify(msg));
+    if (result?.type === 'scheduler_update') {
+      expect(result.name).toBe('renamed');
+      expect(result.cronExpression).toBe('0 0 * * *');
+      expect(result.timeoutMs).toBe(5000);
+    }
+  });
+
   it('parses search_request with query and requestId', () => {
-    const msg = { type: 'search_request', query: 'auth bug', requestId: 'req-42' };
+    const msg = {
+      type: 'search_request',
+      query: 'auth bug',
+      requestId: 'req-42',
+    };
     const result = parseMobileInbound(JSON.stringify(msg));
     expect(result?.type).toBe('search_request');
     if (result?.type === 'search_request') {
@@ -176,8 +229,44 @@ describe('parseMobileInbound — known control types', () => {
   });
 
   it('parses restart_request', () => {
-    expect(parseMobileInbound(JSON.stringify({ type: 'restart_request' }))?.type)
-      .toBe('restart_request');
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'restart_request' }))?.type,
+    ).toBe('restart_request');
+  });
+
+  it('parses suggestions_request', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'suggestions_request' }))?.type,
+    ).toBe('suggestions_request');
+  });
+
+  it('parses suggestions_refresh', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'suggestions_refresh' }))?.type,
+    ).toBe('suggestions_refresh');
+  });
+
+  it('parses suggestion_dismiss with id', () => {
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'suggestion_dismiss', id: 's1' }),
+    );
+    expect(result?.type).toBe('suggestion_dismiss');
+    if (result?.type === 'suggestion_dismiss') expect(result.id).toBe('s1');
+  });
+
+  it('parses suggestion_complete with id', () => {
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'suggestion_complete', id: 's2' }),
+    );
+    expect(result?.type).toBe('suggestion_complete');
+    if (result?.type === 'suggestion_complete') expect(result.id).toBe('s2');
+  });
+
+  it('parses daily_greeting_request', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'daily_greeting_request' }))
+        ?.type,
+    ).toBe('daily_greeting_request');
   });
 });
 
@@ -209,8 +298,10 @@ describe('parseMobileInbound — returns null for invalid input', () => {
   });
 
   it('returns null for an object without a type field', () => {
-    // Legacy image-attachment format: { image: { data, mimeType }, text }
-    const imgMsg = JSON.stringify({ image: { data: 'abc', mimeType: 'image/jpeg' }, text: 'hi' });
+    const imgMsg = JSON.stringify({
+      image: { data: 'abc', mimeType: 'image/jpeg' },
+      text: 'hi',
+    });
     expect(parseMobileInbound(imgMsg)).toBeNull();
   });
 
@@ -227,15 +318,321 @@ describe('parseMobileInbound — returns null for invalid input', () => {
   });
 });
 
-// ── Outbound type echoes (should parse but be dropped by caller) ──────────────
+// ── Unrecognised types are now rejected (strict validation) ───────────────────
 
-describe('parseMobileInbound — parses unknown/outbound types as opaque MobileInbound', () => {
-  it('parses a message with an outbound-style type without throwing', () => {
-    // The parser itself doesn't filter outbound types — that's the caller's job.
-    // This test confirms parseMobileInbound is purely structural (has type field).
-    const result = parseMobileInbound(JSON.stringify({ type: 'response', message: 'echo' }));
-    // Result is non-null because it has a string `type` field
+describe('parseMobileInbound — rejects unknown types', () => {
+  it('returns null for an outbound-style type (not a MobileInbound variant)', () => {
+    const result = parseMobileInbound(
+      JSON.stringify({ type: 'response', message: 'echo' }),
+    );
+    expect(result).toBeNull();
+  });
+
+  it('returns null for a completely fabricated type', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'totally_bogus' })),
+    ).toBeNull();
+  });
+});
+
+// ── Malformed payloads: correct type, missing / wrong-typed fields ────────────
+
+describe('parseMobileInbound — rejects malformed payloads', () => {
+  // ── Missing required fields ──
+
+  it('rejects history_request missing conversationId', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'history_request',
+          before: 1000,
+          limit: 50,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects history_request missing before', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'history_request',
+          conversationId: 'c1',
+          limit: 50,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects history_request missing limit', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'history_request',
+          conversationId: 'c1',
+          before: 1000,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects load_conversation missing conversationId', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'load_conversation' })),
+    ).toBeNull();
+  });
+
+  it('rejects rename_conversation missing title', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'rename_conversation',
+          conversationId: 'c1',
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects rename_conversation missing conversationId', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'rename_conversation', title: 'New title' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects delete_conversation missing conversationId', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'delete_conversation' })),
+    ).toBeNull();
+  });
+
+  it('rejects delete_multiple_conversations missing conversationIds', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'delete_multiple_conversations' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects plugin_switch missing name', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'plugin_switch' })),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_toggle missing id', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'scheduler_toggle' })),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_delete missing id', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'scheduler_delete' })),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_run missing id', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'scheduler_run' })),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_create missing name', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'scheduler_create',
+          cronExpression: '* * * * *',
+          taskPrompt: 'Go',
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_create missing cronExpression', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'scheduler_create',
+          name: 'Job',
+          taskPrompt: 'Go',
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_create missing taskPrompt', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'scheduler_create',
+          name: 'Job',
+          cronExpression: '* * * * *',
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_create with zero required fields', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'scheduler_create' })),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_update missing id', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'scheduler_update', taskPrompt: 'x' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects scheduler_update missing taskPrompt', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'scheduler_update', id: 'task-1' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects search_request missing query', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'search_request', requestId: 'r1' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects search_request missing requestId', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'search_request', query: 'test' }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects suggestion_dismiss missing id', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'suggestion_dismiss' })),
+    ).toBeNull();
+  });
+
+  it('rejects suggestion_complete missing id', () => {
+    expect(
+      parseMobileInbound(JSON.stringify({ type: 'suggestion_complete' })),
+    ).toBeNull();
+  });
+
+  // ── Wrong field types ──
+
+  it('rejects history_request with string before', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'history_request',
+          conversationId: 'c1',
+          before: 'not-a-num',
+          limit: 50,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects history_request with string limit', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'history_request',
+          conversationId: 'c1',
+          before: 1000,
+          limit: 'fifty',
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects load_conversation with numeric conversationId', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'load_conversation', conversationId: 12345 }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects plugin_switch with numeric name', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({ type: 'plugin_switch', name: 42 }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects delete_multiple_conversations with non-string array items', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'delete_multiple_conversations',
+          conversationIds: [1, 2, 3],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects delete_multiple_conversations with non-array conversationIds', () => {
+    expect(
+      parseMobileInbound(
+        JSON.stringify({
+          type: 'delete_multiple_conversations',
+          conversationIds: 'not-an-array',
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  // ── Optional fields with wrong types are silently stripped ──
+
+  it('strips non-numeric timeoutMs from scheduler_create', () => {
+    const msg = {
+      type: 'scheduler_create',
+      name: 'Job',
+      cronExpression: '* * * * *',
+      taskPrompt: 'Go',
+      timeoutMs: 'not-a-number',
+    };
+    const result = parseMobileInbound(JSON.stringify(msg));
     expect(result).not.toBeNull();
-    expect(result!.type).toBe('response');
+    if (result?.type === 'scheduler_create') {
+      expect(result.timeoutMs).toBeUndefined();
+    }
+  });
+
+  it('strips non-string optional name from scheduler_update', () => {
+    const msg = {
+      type: 'scheduler_update',
+      id: 'task-1',
+      taskPrompt: 'Go',
+      name: 123,
+    };
+    const result = parseMobileInbound(JSON.stringify(msg));
+    expect(result).not.toBeNull();
+    if (result?.type === 'scheduler_update') {
+      expect(result.name).toBeUndefined();
+    }
+  });
+
+  // ── Extra fields are dropped (validators reconstruct clean objects) ──
+
+  it('drops extra fields not in the schema', () => {
+    const msg = {
+      type: 'ping',
+      evil: 'payload',
+      __proto__: { admin: true },
+    };
+    const result = parseMobileInbound(JSON.stringify(msg));
+    expect(result).not.toBeNull();
+    expect(result).toEqual({ type: 'ping' });
+    expect((result as Record<string, unknown>).evil).toBeUndefined();
   });
 });
