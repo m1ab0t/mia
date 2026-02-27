@@ -1,6 +1,6 @@
 # mia
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A distributed AI coding assistant with P2P networking, pluggable coding agent support, and developer workflow commands.
 
@@ -179,6 +179,13 @@ Memory is stored at `~/.mia/memory.lance`.
 
 **Stack:** TypeScript · ESM · Anthropic SDK · LanceDB · Hyperswarm · Vitest · esbuild
 
+## Acknowledgements
+
+MIA's P2P networking is built on top of the work by the [Holepunch](https://holepunch.to) team. Massive thanks for making decentralised, encrypted networking accessible to everyone:
+
+- [Hyperswarm](https://github.com/holepunchto/hyperswarm) (MIT)
+- [HyperDB](https://github.com/holepunchto/hyperdb) (Apache-2.0)
+
 ## License
 
-MIT
+[Apache-2.0](LICENSE)

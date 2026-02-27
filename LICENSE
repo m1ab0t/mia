@@ -189,13 +189,3 @@
    See the License for the specific language governing permissions and
    limitations under the License.
 
--------------------------------------------------------------------------------
-
-ACKNOWLEDGEMENTS
-
-MIA's peer-to-peer networking is built on top of the incredible work by the
-Holepunch team. Huge thanks to them for making decentralised, encrypted
-networking accessible to everyone:
-
-  - Hyperswarm  — https://github.com/holepunchto/hyperswarm (MIT)
-  - HyperDB    — https://github.com/holepunchto/hyperdb (Apache-2.0)
