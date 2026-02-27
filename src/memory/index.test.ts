@@ -1313,3 +1313,71 @@ describe('MemoryStore — FIFO row-cap eviction', () => {
     expect(mockDelete).not.toHaveBeenCalled();
   });
 });
+
+// ── Query timeout guards ──────────────────────────────────────────────────
+
+describe('Query timeout guards', () => {
+  it('search() returns [] when the vector query exceeds the timeout', async () => {
+    vi.useFakeTimers();
+    const store = await makeConnectedStore();
+    mockDb.tableNames.mockResolvedValue(['memories']);
+
+    // toArray() never resolves — simulates a stuck LanceDB query
+    const mockToArray = vi.fn().mockReturnValue(new Promise(() => {}));
+    const mockLimit = vi.fn().mockReturnValue({ toArray: mockToArray });
+    mockTable.vectorSearch.mockReturnValue({ limit: mockLimit, where: vi.fn() });
+
+    const searchPromise = store.search('stuck query', 5, false);
+    // Advance past the 5s timeout
+    await vi.advanceTimersByTimeAsync(6_000);
+    const results = await searchPromise;
+
+    expect(results).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it('searchByType() returns [] when the vector query exceeds the timeout', async () => {
+    vi.useFakeTimers();
+    const store = await makeConnectedStore();
+    mockDb.tableNames.mockResolvedValue(['memories']);
+
+    const mockToArray = vi.fn().mockReturnValue(new Promise(() => {}));
+    const mockLimit = vi.fn().mockReturnValue({ toArray: mockToArray });
+    const mockWhere = vi.fn().mockReturnValue({ limit: mockLimit });
+    mockTable.vectorSearch.mockReturnValue({ limit: mockLimit, where: mockWhere });
+
+    const searchPromise = store.searchByType('stuck', 'fact', 3);
+    await vi.advanceTimersByTimeAsync(6_000);
+    const results = await searchPromise;
+
+    expect(results).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it('getRecent() returns [] when the scan query exceeds the timeout', async () => {
+    vi.useFakeTimers();
+    const store = await makeConnectedStore();
+    mockDb.tableNames.mockResolvedValue(['memories']);
+
+    const mockToArray = vi.fn().mockReturnValue(new Promise(() => {}));
+    const mockLimit = vi.fn().mockReturnValue({ toArray: mockToArray });
+    mockTable.query.mockReturnValue({ limit: mockLimit });
+
+    const recentPromise = store.getRecent(5);
+    await vi.advanceTimersByTimeAsync(6_000);
+    const results = await recentPromise;
+
+    expect(results).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it('search() resolves normally when the query finishes before the timeout', async () => {
+    const store = await makeConnectedStore();
+    mockDb.tableNames.mockResolvedValue(['memories']);
+    setupVectorSearch([makeRow({ content: 'fast result', _distance: 0.1 })]);
+
+    const results = await store.search('fast', 1, false);
+    expect(results).toHaveLength(1);
+    expect(results[0].content).toBe('fast result');
+  });
+});

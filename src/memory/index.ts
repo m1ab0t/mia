@@ -28,6 +28,9 @@ const SCAN_PAGE_SIZE = 1000;
 /** TTL for the in-memory query result cache (30 seconds). */
 const QUERY_CACHE_TTL_MS = 30_000;
 
+/** Maximum time (ms) a single LanceDB query may run before being aborted. */
+const QUERY_TIMEOUT_MS = 5_000;
+
 /**
  * Default maximum number of entries in the in-memory query result cache.
  * Oldest (least-recently-used) entries are evicted when this limit is reached.
@@ -111,6 +114,19 @@ function assertValidMemoryType(value: unknown): asserts value is MemoryEntry['ty
       `Must be one of: ${MEMORY_ENTRY_TYPES.map(t => `"${t}"`).join(', ')}.`
     );
   }
+}
+
+/**
+ * Race a promise against a timeout.  Rejects with a descriptive error if the
+ * timeout fires first.  The underlying promise is NOT cancelled (LanceDB
+ * doesn't support AbortSignal), but the caller moves on immediately.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`LanceDB query timed out after ${ms}ms (${label})`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 export interface MemorySearchResult {
@@ -609,10 +625,11 @@ export class MemoryStore {
       // Fetch more results for reranking (3x the limit)
       const fetchLimit = rerank ? limit * 3 : limit;
 
-      const results = await table
-        .vectorSearch(queryVector)
-        .limit(fetchLimit)
-        .toArray();
+      const results = await withTimeout(
+        table.vectorSearch(queryVector).limit(fetchLimit).toArray(),
+        QUERY_TIMEOUT_MS,
+        'search',
+      );
 
       let searchResults = results.map((row: Record<string, unknown>) => ({
         content: row.content as string,
@@ -681,11 +698,11 @@ export class MemoryStore {
 
       const queryVector = await this.embeddingFn(query);
 
-      const results = await table
-        .vectorSearch(queryVector)
-        .where(`type = '${type}'`)
-        .limit(limit)
-        .toArray();
+      const results = await withTimeout(
+        table.vectorSearch(queryVector).where(`type = '${type}'`).limit(limit).toArray(),
+        QUERY_TIMEOUT_MS,
+        'searchByType',
+      );
 
       const searchResults = results.map((row: Record<string, unknown>) => ({
         content: row.content as string,
@@ -717,7 +734,11 @@ export class MemoryStore {
 
       // Get all and sort by timestamp (LanceDB doesn't have native sorting)
       // Use a dummy query to get results
-      const results = await table.query().limit(limit * 10).toArray();
+      const results = await withTimeout(
+        table.query().limit(limit * 10).toArray(),
+        QUERY_TIMEOUT_MS,
+        'getRecent',
+      );
 
       return results
         .sort((a, b) => (b.timestamp as number) - (a.timestamp as number))
