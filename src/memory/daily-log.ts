@@ -9,8 +9,7 @@
  * Files: ~/.mia/memory/YYYY-MM-DD.md
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 
 import { MIA_DIR } from '../constants/paths';
@@ -25,35 +24,6 @@ function formatDate(date: Date): string {
 
 function getLogPath(date: Date): string {
   return join(MEMORY_LOG_DIR, `${formatDate(date)}.md`);
-}
-
-/**
- * Ensure the memory log directory exists
- */
-async function ensureLogDir(): Promise<void> {
-  if (!existsSync(MEMORY_LOG_DIR)) {
-    await mkdir(MEMORY_LOG_DIR, { recursive: true });
-  }
-}
-
-/**
- * Append an entry to today's daily log
- */
-export async function appendDailyLog(entry: string): Promise<void> {
-  await ensureLogDir();
-  const logPath = getLogPath(new Date());
-  const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-
-  let existing = '';
-  try {
-    existing = await readFile(logPath, 'utf-8');
-  } catch {
-    // File doesn't exist yet — start fresh
-    existing = `# ${formatDate(new Date())}\n\n`;
-  }
-
-  const newContent = `${existing.trimEnd()}\n\n- **${timestamp}** ${entry}\n`;
-  await writeFile(logPath, newContent, 'utf-8');
 }
 
 /**

@@ -152,14 +152,6 @@ export function getLastTag(cwd: string): string | null {
 }
 
 /**
- * Return the SHA of the first commit in the repo (for when there are no tags).
- * Exported for testing.
- */
-export function getFirstCommit(cwd: string): string | null {
-  return gitSafe(cwd, ['rev-list', '--max-parents=0', 'HEAD']);
-}
-
-/**
  * Return an array of CommitInfo objects between `from` and `to`.
  * Uses a null-byte separator so subjects with newlines don't break parsing.
  * Exported for testing.

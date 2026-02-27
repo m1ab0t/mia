@@ -12,7 +12,7 @@
  *   3. Behavioral guidance
  */
 
-export type PromptMode = 'full' | 'minimal' | 'none';
+type PromptMode = 'full' | 'minimal' | 'none';
 
 // ── Section builders ────────────────────────────────────────────────
 
@@ -74,13 +74,6 @@ export function buildCodingPrompt(mode: PromptMode = 'full'): string {
   return sections.join('\n\n');
 }
 
-export function buildGeneralPrompt(mode: PromptMode = 'full'): string {
-  return buildCodingPrompt(mode);
-}
-
-// Legacy exports
-export const CODING_SYSTEM_PROMPT = buildCodingPrompt('full');
-export const GENERAL_SYSTEM_PROMPT = buildGeneralPrompt('full');
 
 export const CONVERSATION_CONTINUITY_PROMPT = `═══ CONVERSATION CONTINUITY ═══
 • You are in a multi-turn chat session. Your full conversation history is preserved.

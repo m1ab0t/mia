@@ -13,7 +13,6 @@ export type {
 
 export { PluginRegistry } from './registry';
 export { PluginDispatcher } from './dispatcher';
-export type { DispatcherOptions } from './dispatcher';
 
 export { ContextPreparer } from './context-preparer';
 export type { ContextPreparerOptions } from './context-preparer';

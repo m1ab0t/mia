@@ -3,15 +3,6 @@ export const DEFAULT_PLUGIN = 'claude-code';
 
 // Default context limits
 export const DEFAULT_MAX_TOKENS = 128000;
-export const DEFAULT_CURRENT_TOKENS = 0;
-export const DEFAULT_PERCENT_USED = 0;
-
-// Default context usage object
-export const DEFAULT_CONTEXT_USAGE = {
-  currentTokens: DEFAULT_CURRENT_TOKENS,
-  maxTokens: DEFAULT_MAX_TOKENS,
-  percentUsed: DEFAULT_PERCENT_USED,
-};
 
 // Map models to their providers for fluency.js
 const PROVIDER_PREFIXES: [RegExp, string][] = [

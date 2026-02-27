@@ -2,7 +2,6 @@
  * Tests for memory/daily-log.ts
  *
  * Covers:
- *   - appendDailyLog: directory creation, new-file bootstrap, append-to-existing, formatting
  *   - loadRecentDailyLogs: empty case, today-only, yesterday-only, both, truncation, whitespace
  */
 
@@ -10,14 +9,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // ── Mock filesystem before any imports ────────────────────────────────────────
 
-vi.mock('fs', () => ({
-  existsSync: vi.fn(),
-}));
-
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(),
-  writeFile: vi.fn(),
-  mkdir: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../constants/paths', () => ({
@@ -26,92 +19,10 @@ vi.mock('../constants/paths', () => ({
 
 // ── Import module under test ───────────────────────────────────────────────────
 
-import { appendDailyLog, loadRecentDailyLogs } from './daily-log';
-import { existsSync } from 'fs';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { loadRecentDailyLogs } from './daily-log';
+import { readFile } from 'fs/promises';
 
-const mockExistsSync = existsSync as ReturnType<typeof vi.fn>;
 const mockReadFile = readFile as ReturnType<typeof vi.fn>;
-const mockWriteFile = writeFile as ReturnType<typeof vi.fn>;
-const mockMkdir = mkdir as ReturnType<typeof vi.fn>;
-
-// ── appendDailyLog ─────────────────────────────────────────────────────────────
-
-describe('appendDailyLog', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockWriteFile.mockResolvedValue(undefined);
-    mockMkdir.mockResolvedValue(undefined);
-  });
-
-  it('creates the memory log directory when it does not exist', async () => {
-    mockExistsSync.mockReturnValue(false);
-    mockReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-
-    await appendDailyLog('Test entry');
-
-    expect(mockMkdir).toHaveBeenCalledWith(
-      expect.stringContaining('/test/.mia/memory'),
-      { recursive: true }
-    );
-  });
-
-  it('skips mkdir when the log directory already exists', async () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFile.mockRejectedValue(new Error('ENOENT'));
-
-    await appendDailyLog('Test entry');
-
-    expect(mockMkdir).not.toHaveBeenCalled();
-  });
-
-  it('bootstraps a new file with a date header when the file does not exist', async () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFile.mockRejectedValue(new Error('ENOENT'));
-
-    await appendDailyLog('Build completed');
-
-    expect(mockWriteFile).toHaveBeenCalledOnce();
-    const writtenContent = mockWriteFile.mock.calls[0][1] as string;
-    // Should start with # YYYY-MM-DD header
-    expect(writtenContent).toMatch(/^# \d{4}-\d{2}-\d{2}/);
-    expect(writtenContent).toContain('Build completed');
-  });
-
-  it('preserves existing content when appending', async () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFile.mockResolvedValue('# 2026-02-22\n\n- **10:00:00** Earlier entry');
-
-    await appendDailyLog('New work item');
-
-    const writtenContent = mockWriteFile.mock.calls[0][1] as string;
-    expect(writtenContent).toContain('Earlier entry');
-    expect(writtenContent).toContain('New work item');
-  });
-
-  it('formats each entry as a bold-timestamp bullet point', async () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFile.mockRejectedValue(new Error('ENOENT'));
-
-    await appendDailyLog('Task finished');
-
-    const writtenContent = mockWriteFile.mock.calls[0][1] as string;
-    // Format: - **HH:MM:SS** entry text
-    expect(writtenContent).toMatch(/- \*\*\d{2}:\d{2}:\d{2}\*\* Task finished/);
-  });
-
-  it('writes to a path containing the current date', async () => {
-    mockExistsSync.mockReturnValue(true);
-    mockReadFile.mockRejectedValue(new Error('ENOENT'));
-
-    await appendDailyLog('Dated entry');
-
-    const writtenPath = mockWriteFile.mock.calls[0][0] as string;
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    expect(writtenPath).toContain(today);
-    expect(writtenPath).toContain('/test/.mia/memory');
-  });
-});
 
 // ── loadRecentDailyLogs ────────────────────────────────────────────────────────
 
