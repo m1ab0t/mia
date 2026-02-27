@@ -33,28 +33,45 @@ class IpcWriteQueue {
     }
     this.entries.push(data);
     if (!this.draining) {
-      this._drain();
+      this._drain().catch(() => {
+        // Stream write failed (agent stdin closed) — discard remaining entries.
+        this.entries.length = 0;
+      });
     }
   }
 
-  private _drain(): void {
+  private async _drain(): Promise<void> {
     this.draining = true;
-    while (this.entries.length > 0) {
-      const item = this.entries.shift()!;
-      let ok: boolean;
-      try {
-        ok = this.stream.write(item);
-      } catch {
-        this.entries.length = 0;
-        this.draining = false;
-        return;
+    try {
+      while (this.entries.length > 0) {
+        const item = this.entries.shift()!;
+        let ok: boolean;
+        try {
+          ok = this.stream.write(item);
+        } catch {
+          this.entries.length = 0;
+          break;
+        }
+        if (!ok) {
+          // Backpressure: yield to the event loop until the stream drains.
+          await new Promise<void>((resolve) => {
+            const cleanup = () => {
+              this.stream.off('drain', onDrain);
+              this.stream.off('error', onErr);
+              this.stream.off('close', onClose);
+            };
+            const onDrain = () => { cleanup(); resolve(); };
+            const onErr   = () => { cleanup(); resolve(); };
+            const onClose = () => { cleanup(); resolve(); };
+            this.stream.once('drain', onDrain);
+            this.stream.once('error', onErr);
+            this.stream.once('close', onClose);
+          });
+        }
       }
-      if (!ok) {
-        this.stream.once('drain', () => this._drain());
-        return;
-      }
+    } finally {
+      this.draining = false;
     }
-    this.draining = false;
   }
 
   destroy(): void {
