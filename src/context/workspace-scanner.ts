@@ -75,9 +75,9 @@ export function scanGitState(cwd: string): GitState {
   }
 
   try {
-    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8' }).trim();
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
 
-    const statusOutput = execSync('git status --short', { cwd, encoding: 'utf-8' }).trim();
+    const statusOutput = execSync('git status --short', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
     const statusLines = splitLines(statusOutput);
 
     const uncommittedChanges: string[] = [];
@@ -101,7 +101,7 @@ export function scanGitState(cwd: string): GitState {
       }
     }
 
-    const recentCommits = execSync('git log --oneline -n 5', { cwd, encoding: 'utf-8' })
+    const recentCommits = execSync('git log --oneline -n 5', { cwd, encoding: 'utf-8', timeout: 5000 })
       .trim()
       .split('\n')
       .filter(Boolean);
