@@ -33,6 +33,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 import { getErrorMessage } from '../utils/error-message.js';
 import { logger } from '../utils/logger.js';
+import { NdjsonParser } from '../utils/ndjson-parser.js';
 import type {
   CodingPlugin,
   CodingPluginCallbacks,
@@ -57,6 +58,8 @@ const STALL_CHECK_INTERVAL_MS = 15_000;
  * If a child process emits a line larger than this (e.g. a binary blob or a
  * runaway JSON object with no terminating newline), the partial buffer is
  * discarded rather than growing the heap without bound.
+ *
+ * Passed to NdjsonParser as `maxBufferBytes`.
  */
 const MAX_STDOUT_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MiB
 
@@ -104,13 +107,10 @@ interface QueueEntry {
 }
 
 /**
- * Mutable reference shared between the stdout-data handler and the close
- * handler so both see the same partial-line buffer without needing to be in
- * the same closure scope.
+ * The NdjsonParser instance is threaded through so the stdout-data handler
+ * and close handler share the same parser (and its internal buffer) without
+ * a shared closure variable.
  */
-interface BufferRef {
-  value: string;
-}
 
 /** Resolved session information returned by `_resolveSession`. */
 interface SessionResolution {
@@ -410,12 +410,12 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     callbacks: CodingPluginCallbacks
   ): Promise<PluginDispatchResult> {
     return new Promise<PluginDispatchResult>((resolve) => {
-      const bufRef: BufferRef = { value: '' };
+      const parser = this._createStdoutParser(taskId, callbacks);
       const timer = this._setupTimeout(taskId, timeoutMs, callbacks, resolve);
       const stallTimer = this._setupStallTimer(taskId, callbacks, resolve);
-      this._setupStdoutParser(child, taskId, callbacks, bufRef);
+      this._setupStdoutParser(child, taskId, callbacks, parser);
       this._setupStderrSink(child, taskId);
-      this._setupCloseHandler(child, taskId, callbacks, resolve, timer, stallTimer, bufRef);
+      this._setupCloseHandler(child, taskId, callbacks, resolve, timer, stallTimer, parser);
       this._setupErrorHandler(child, taskId, callbacks, resolve, timer, stallTimer);
     });
   }
@@ -447,32 +447,26 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
   }
 
   /**
-   * Attaches the `data` listener to the child's stdout stream.
+   * Creates an NdjsonParser wired to this plugin's message handling.
    *
-   * Splits the incoming byte stream on newlines, parses each complete line as
-   * JSON, and dispatches to `_handleMessage`.  The trailing partial line is
-   * held in `bufRef.value` until the `close` event flushes it.
-   *
-   * If the partial buffer grows beyond `MAX_STDOUT_BUFFER_BYTES` (e.g. a
-   * binary blob or a runaway JSON object with no terminating newline) it is
-   * discarded to prevent unbounded heap growth.  A warning is printed so the
-   * event is not invisible.
+   * The parser handles buffering, line splitting, overflow protection, and
+   * JSON parsing — this plugin just provides the callbacks.
    */
-  private _setupStdoutParser(
-    child: ChildProcess,
+  private _createStdoutParser(
     taskId: string,
-    callbacks: CodingPluginCallbacks,
-    bufRef: BufferRef
-  ): void {
-    child.stdout!.on('data', (chunk: Buffer) => {
-      bufRef.value += chunk.toString();
-      const lines = bufRef.value.split('\n');
-      bufRef.value = lines.pop() ?? '';
-
-      if (bufRef.value.length > MAX_STDOUT_BUFFER_BYTES) {
+    callbacks: CodingPluginCallbacks
+  ): NdjsonParser {
+    return new NdjsonParser({
+      maxBufferBytes: MAX_STDOUT_BUFFER_BYTES,
+      onMessage: (parsed) => {
+        const task = this.tasks.get(taskId);
+        if (task) task.lastActivityAt = Date.now();
+        this._handleMessage(taskId, parsed, callbacks);
+      },
+      onOverflow: (discardedBytes) => {
         const errorMsg =
           `[BaseSpawnPlugin] stdout buffer overflow for task ${taskId} — ` +
-          `discarding ${bufRef.value.length} bytes of unframed data`;
+          `discarding ${discardedBytes} bytes of unframed data`;
         logger.warn(errorMsg);
         const task = this.tasks.get(taskId);
         if (task && task.status === 'running') {
@@ -484,21 +478,25 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
         } else if (!task) {
           this._emitErrorCallback(null, callbacks, new PluginError(errorMsg, PluginErrorCode.BUFFER_OVERFLOW, this.name));
         }
-        bufRef.value = '';
-      }
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line) as Record<string, unknown>;
-          const task = this.tasks.get(taskId);
-          if (task) task.lastActivityAt = Date.now();
-          this._handleMessage(taskId, parsed, callbacks);
-        } catch {
-          // Non-JSON output — ignore
-        }
-      }
+      },
+      // Non-JSON stdout lines are silently ignored (same as before).
     });
+  }
+
+  /**
+   * Attaches the `data` listener to the child's stdout stream.
+   *
+   * Delegates all buffering, line splitting, and JSON parsing to the
+   * NdjsonParser instance.  The parser's internal buffer holds the trailing
+   * partial line until the `close` event calls `parser.flush()`.
+   */
+  private _setupStdoutParser(
+    child: ChildProcess,
+    _taskId: string,
+    _callbacks: CodingPluginCallbacks,
+    parser: NdjsonParser
+  ): void {
+    child.stdout!.on('data', (chunk: Buffer) => parser.write(chunk));
   }
 
   /**
@@ -530,25 +528,15 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     resolve: (result: PluginDispatchResult) => void,
     timer: ReturnType<typeof setTimeout>,
     stallTimer: ReturnType<typeof setInterval>,
-    bufRef: BufferRef
+    parser: NdjsonParser
   ): void {
     child.on('close', (code) => {
       clearTimeout(timer);
       clearInterval(stallTimer);
       this.processes.delete(taskId);
 
-      // Flush any remaining buffered line
-      if (bufRef.value.trim()) {
-        try {
-          this._handleMessage(
-            taskId,
-            JSON.parse(bufRef.value) as Record<string, unknown>,
-            callbacks
-          );
-        } catch {
-          // ignore
-        }
-      }
+      // Flush any remaining buffered content through the parser
+      parser.flush();
 
       const task = this.tasks.get(taskId);
       if (task && task.status === 'running') {

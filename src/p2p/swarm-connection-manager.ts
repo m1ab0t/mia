@@ -16,6 +16,7 @@
 
 import b4a from 'b4a';
 import type { Duplex } from 'stream';
+import { getErrorMessage } from '../utils/error-message';
 import { logger } from '../utils/logger';
 
 // ── Anonymous connection cap ──────────────────────────────────────────
@@ -102,11 +103,6 @@ export function pruneBackoffState(): void {
   for (const [key, entry] of peerBackoff) {
     if (entry.lastDisconnectAt < cutoff) peerBackoff.delete(key);
   }
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }
 
 /**

@@ -24,6 +24,7 @@ import type { Duplex } from 'stream';
 import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getErrorMessage } from '../utils/error-message';
 import { logger } from '../utils/logger';
 import {
   getConversations,
@@ -164,13 +165,6 @@ export function isEchoedResponse(message: string): boolean {
     return false;
   }
   return true;
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }
 
 // ── Per-connection senders ────────────────────────────────────────────

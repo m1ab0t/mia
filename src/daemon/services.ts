@@ -15,6 +15,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { hexToBase64 } from '../utils/encoding';
 import { getErrorMessage } from '../utils/error-message';
+import { NdjsonParser, LineParser } from '../utils/ndjson-parser';
 
 import {
   configureP2PSender,
@@ -89,57 +90,41 @@ export async function spawnP2PSubAgent(
     configureP2PSender(child.stdin);
 
     // Forward agent stderr → daemon debug log
-    let stderrBuf = '';
+    const stderrParser = new LineParser((line) => log('debug', `[p2p] ${line}`));
     child.stderr.setEncoding('utf-8');
-    child.stderr.on('data', (chunk: string) => {
-      stderrBuf += chunk;
-      const lines = stderrBuf.split('\n');
-      stderrBuf = lines.pop() ?? '';
-      for (const line of lines) {
-        const msg = line.trim();
-        if (msg) log('debug', `[p2p] ${msg}`);
-      }
-    });
+    child.stderr.on('data', (chunk: string) => stderrParser.write(chunk));
 
     // NDJSON reader for agent stdout
-    let stdoutBuf = '';
     let resolved = false;
     let peerConnectedCallback: (() => void) | null = null;
 
-    child.stdout.setEncoding('utf-8');
-    child.stdout.on('data', (chunk: string) => {
-      stdoutBuf += chunk;
-      const lines = stdoutBuf.split('\n');
-      stdoutBuf = lines.pop() ?? '';
-      for (const line of lines) {
-        const raw = line.trim();
-        if (!raw) continue;
-        try {
-          const msg = JSON.parse(raw) as AgentToDaemon;
-          handleAgentMessage(msg, {
-            routeMessageFn,
-            queue,
-            onPluginSwitch,
-            getPluginsInfo,
-            log,
-            onRestart: onRestart || (() => {}),
-            getTaskStatus: getTaskStatus || (() => ({ running: false, count: 0 })),
-            onPeerConnected: () => peerConnectedCallback?.(),
-            resolveReady: (result) => {
-              if (!resolved) {
-                resolved = true;
-                resolve({
-                  ...result,
-                  onPeerConnected: (cb) => { peerConnectedCallback = cb; },
-                });
-              }
-            },
+    const handlerCtx: HandlerCtx = {
+      routeMessageFn,
+      queue,
+      onPluginSwitch,
+      getPluginsInfo,
+      log,
+      onRestart: onRestart || (() => {}),
+      getTaskStatus: getTaskStatus || (() => ({ running: false, count: 0 })),
+      onPeerConnected: () => peerConnectedCallback?.(),
+      resolveReady: (result) => {
+        if (!resolved) {
+          resolved = true;
+          resolve({
+            ...result,
+            onPeerConnected: (cb) => { peerConnectedCallback = cb; },
           });
-        } catch {
-          log('warn', `[p2p] Malformed agent message: ${raw.slice(0, 120)}`);
         }
-      }
+      },
+    };
+
+    const stdoutParser = new NdjsonParser<AgentToDaemon>({
+      onMessage: (msg) => handleAgentMessage(msg, handlerCtx),
+      onParseError: (line) => log('warn', `[p2p] Malformed agent message: ${line.slice(0, 120)}`),
     });
+
+    child.stdout.setEncoding('utf-8');
+    child.stdout.on('data', (chunk: string) => stdoutParser.write(chunk));
 
     child.on('error', (err) => {
       log('error', `P2P agent process error: ${getErrorMessage(err)}`);

@@ -14,6 +14,7 @@ import Hyperswarm from 'hyperswarm';
 import b4a from 'b4a';
 import type { Duplex } from 'stream';
 import { getOrCreateP2PSeed, deriveTopicKey } from '../config';
+import { getErrorMessage } from '../utils/error-message';
 import { logger } from '../utils/logger';
 import {
   initMessageStore,
@@ -79,11 +80,6 @@ interface P2PStatus {
 
 interface PeerInfo {
   publicKey?: Buffer;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }
 
 // ── Utility helpers ───────────────────────────────────────────────────
