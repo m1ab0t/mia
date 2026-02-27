@@ -372,11 +372,6 @@ describe('context injection constants', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('resolveInjectionPath', () => {
-  it('returns absolute paths unchanged', () => {
-    const abs = '/home/user/project/src/auth.ts';
-    expect(resolveInjectionPath(abs, '/some/cwd')).toBe(abs);
-  });
-
   it('resolves relative paths against cwd', () => {
     const result = resolveInjectionPath('src/auth.ts', '/home/user/project');
     expect(result).toBe('/home/user/project/src/auth.ts');
@@ -387,18 +382,44 @@ describe('resolveInjectionPath', () => {
     expect(result).toBe('/home/user/project/package.json');
   });
 
-  it('resolves parent directory traversal', () => {
-    const result = resolveInjectionPath('../shared/types.ts', '/home/user/project/src');
-    expect(result).toBe('/home/user/project/shared/types.ts');
+  it('allows absolute paths within cwd', () => {
+    const abs = '/home/user/project/src/auth.ts';
+    expect(resolveInjectionPath(abs, '/home/user/project')).toBe(abs);
   });
 
-  it('uses homedir() expansion when path starts with ~', () => {
-    // resolveInjectionPath does NOT expand ~ (that is intentional — shell does it)
-    // Just verify the function returns something deterministic
-    const result = resolveInjectionPath('~/file.ts', '/some/cwd');
-    // Since '~' is not absolute and not expanded, it's joined to cwd
-    expect(typeof result).toBe('string');
-    expect(result.length).toBeGreaterThan(0);
+  it('blocks parent directory traversal that escapes cwd', () => {
+    expect(() =>
+      resolveInjectionPath('../../../etc/passwd', '/home/user/project'),
+    ).toThrow('path traversal blocked');
+  });
+
+  it('blocks absolute paths outside cwd', () => {
+    expect(() =>
+      resolveInjectionPath('/etc/passwd', '/home/user/project'),
+    ).toThrow('path traversal blocked');
+  });
+
+  it('blocks relative traversal one level up', () => {
+    expect(() =>
+      resolveInjectionPath('../sibling/file.ts', '/home/user/project'),
+    ).toThrow('path traversal blocked');
+  });
+
+  it('allows nested subdirectories within cwd', () => {
+    const result = resolveInjectionPath('src/deep/nested/file.ts', '/home/user/project');
+    expect(result).toBe('/home/user/project/src/deep/nested/file.ts');
+  });
+
+  it('allows ./relative paths within cwd', () => {
+    const result = resolveInjectionPath('./src/file.ts', '/home/user/project');
+    expect(result).toBe('/home/user/project/src/file.ts');
+  });
+
+  it('blocks traversal disguised with inner ../ segments', () => {
+    // src/../../etc/passwd normalizes to ../etc/passwd → escapes cwd
+    expect(() =>
+      resolveInjectionPath('src/../../etc/passwd', '/home/user/project'),
+    ).toThrow('path traversal blocked');
   });
 });
 

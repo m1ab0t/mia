@@ -37,7 +37,8 @@ import { appendFile } from 'fs/promises';
 import { join, resolve, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
-import { spawnSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { x, bold, dim, red, green, cyan, gray, yellow, DASH } from '../../utils/ansi.js';
 import { logger } from '../../utils/logger.js';
 import { loadActivePlugin } from './plugin-loader.js';
@@ -45,6 +46,7 @@ import { readMiaConfig } from '../../config/mia-config.js';
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
+const execAsync = promisify(exec);
 const CONVERSATIONS_DIR = join(homedir(), '.mia', 'conversations');
 
 // ── Context injection constants ──────────────────────────────────────────────
@@ -91,11 +93,16 @@ export function describeInjection(injection: string): { type: string; source: st
 
 /**
  * Resolve a user-supplied path (relative to cwd or absolute) to an absolute path.
+ * Throws if the resolved path escapes the workspace boundary (cwd).
  * Exported for testing.
  */
 export function resolveInjectionPath(input: string, cwd: string): string {
-  if (isAbsolute(input)) return input;
-  return resolve(cwd, input);
+  const normalizedCwd = resolve(cwd);
+  const resolved = isAbsolute(input) ? resolve(input) : resolve(normalizedCwd, input);
+  if (resolved !== normalizedCwd && !resolved.startsWith(normalizedCwd + '/')) {
+    throw new Error(`path traversal blocked — resolved path escapes workspace: ${input}`);
+  }
+  return resolved;
 }
 
 /**
@@ -690,7 +697,15 @@ export async function handleChatCommand(argv: string[]): Promise<void> {
             return;
           }
 
-          const resolvedPath = resolveInjectionPath(rawPath, cwd);
+          let resolvedPath: string;
+          try {
+            resolvedPath = resolveInjectionPath(rawPath, cwd);
+          } catch {
+            console.log(`  ${red}blocked${x}  ${dim}path escapes workspace boundary${x}`);
+            console.log('');
+            promptUser();
+            return;
+          }
 
           if (!existsSync(resolvedPath)) {
             console.log(`  ${red}not found${x}  ${dim}${resolvedPath}${x}`);
@@ -753,18 +768,26 @@ export async function handleChatCommand(argv: string[]): Promise<void> {
 
           process.stdout.write(`  ${dim}running…${x}  ${gray}${execCmd}${x}\n`);
 
-          const execResult = spawnSync(execCmd, {
-            shell: true,
-            cwd,
-            timeout: readMiaConfig().chat?.execTimeoutMs ?? EXEC_TIMEOUT_MS,
-            maxBuffer: 10 * 1024 * 1024,
-            encoding: 'utf-8',
-          });
-
-          const stdout = (execResult.stdout as string) || '';
-          const stderr = (execResult.stderr as string) || '';
-          const exitCode = execResult.status ?? (execResult.error ? 1 : 0);
-          const timedOut = execResult.signal === 'SIGTERM' || execResult.error?.message?.includes('ETIMEDOUT');
+          let stdout = '';
+          let stderr = '';
+          let exitCode = 0;
+          let timedOut = false;
+          try {
+            const result = await execAsync(execCmd, {
+              cwd,
+              timeout: readMiaConfig().chat?.execTimeoutMs ?? EXEC_TIMEOUT_MS,
+              maxBuffer: 10 * 1024 * 1024,
+              encoding: 'utf-8',
+            });
+            stdout = result.stdout || '';
+            stderr = result.stderr || '';
+          } catch (err: unknown) {
+            const e = err as { stdout?: string; stderr?: string; code?: number; killed?: boolean; signal?: string };
+            stdout = e.stdout || '';
+            stderr = e.stderr || '';
+            exitCode = e.code ?? 1;
+            timedOut = e.killed === true || e.signal === 'SIGTERM';
+          }
 
           const injection = formatExecInjection(execCmd, stdout, stderr, exitCode);
           pendingInjections.push(injection);
@@ -788,17 +811,24 @@ export async function handleChatCommand(argv: string[]): Promise<void> {
 
           process.stdout.write(`  ${dim}running…${x}  ${gray}${diffCmd}${x}\n`);
 
-          const diffResult = spawnSync(diffCmd, {
-            shell: true,
-            cwd,
-            timeout: 10_000,
-            maxBuffer: 10 * 1024 * 1024,
-            encoding: 'utf-8',
-          });
-
-          const diffOut = (diffResult.stdout as string) || '';
-          const diffErr = (diffResult.stderr as string) || '';
-          const diffExit = diffResult.status ?? 0;
+          let diffOut = '';
+          let diffErr = '';
+          let diffExit = 0;
+          try {
+            const result = await execAsync(diffCmd, {
+              cwd,
+              timeout: 10_000,
+              maxBuffer: 10 * 1024 * 1024,
+              encoding: 'utf-8',
+            });
+            diffOut = result.stdout || '';
+            diffErr = result.stderr || '';
+          } catch (err: unknown) {
+            const e = err as { stdout?: string; stderr?: string; code?: number };
+            diffOut = e.stdout || '';
+            diffErr = e.stderr || '';
+            diffExit = e.code ?? 1;
+          }
 
           if (diffExit !== 0 && diffErr.trim()) {
             console.log(`  ${red}git error${x}  ${dim}${diffErr.trim()}${x}`);
