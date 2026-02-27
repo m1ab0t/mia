@@ -16,10 +16,7 @@ const DAEMON_COMMANDS = new Set(['start', 'stop', 'restart', 'status', 'logs']);
 
 const ROUTED_COMMANDS = new Set([
   'p2p', 'plugin', 'scheduler', 'usage', 'ask', 'chat', 'memory', 'log',
-  'watch', 'run', 'doctor', 'fix', 'recap', 'config', 'commit', 'pr',
-  'standup', 'changelog', 'explain', 'test', 'review', 'search', 'debug',
-  'refactor', 'scaffold', 'migrate', 'suggest', 'plan', 'task', 'todo', 'audit',
-  'coverage',
+  'doctor', 'config', 'commit', 'standup', 'changelog',
 ]);
 
 // Commands that require the daemon to be running. A quick ping is performed
@@ -46,7 +43,6 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
 
   ${c}ask${x}     ${d}·${x} send a prompt to the active plugin
   ${c}chat${x}    ${d}·${x} interactive multi-turn conversation
-  ${c}fix${x}     ${d}·${x} run a command and auto-fix failures in a loop
   ${c}memory${x}  ${d}·${x} view and manage memory facts
   ${c}setup${x}   ${d}·${x} first-time setup
   ${c}start${x}   ${d}·${x} start the daemon
@@ -95,41 +91,12 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
   ${c}all${x}     ${d}·${x} all available trace history
   ${c}--json${x}  ${d}·${x} machine-readable JSON  ${d}mia usage week --json${x}
 
-  ${c}run${x}     ${d}·${x} run a command and auto-fix failures
-  ${c}watch${x}   ${d}·${x} watch files and auto-dispatch on changes
   ${c}doctor${x}  ${d}·${x} workspace health diagnostics
-  ${c}recap${x}   ${d}·${x} daily digest: dispatches, commits, tools used
   ${c}log${x}     ${d}·${x} recent dispatch history with git changes
   ${c}--n${x}     ${d}·${x} number of entries     ${d}mia log --n 50${x}
   ${c}--failed${x} ${d}·${x} only failed dispatches
   ${c}--conv${x}  ${d}·${x} filter by conversation  ${d}mia log --conv chat-20240115-abc${x}
   ${c}--json${x}  ${d}·${x} machine-readable JSON  ${d}mia log --json | jq '.[] | .prompt'${x}
-
-  ${d}fix flags${x}
-  ${c}--max-retries${x} ${d}·${x} max fix cycles     ${d}mia fix --max-retries 3 "npm test"${x}
-  ${c}--prompt${x}      ${d}·${x} extra context       ${d}mia fix --prompt "uses pnpm" "pnpm test"${x}
-
-  ${d}run${x}
-  ${c}run${x}     ${d}·${x} run a command and fix failures     ${d}mia run "npm test"${x}
-  ${c}--max-retries${x} ${d}·${x} fix cycles (default: 3)     ${d}mia run "npm test" --max-retries 5${x}
-  ${c}--no-fix${x} ${d}·${x} run once, no auto-fix
-  ${c}--yes${x}    ${d}·${x} skip confirmation before each fix
-  ${c}--timeout${x} ${d}·${x} command timeout in ms           ${d}mia run "npm test" --timeout 60000${x}
-
-  ${d}watch${x}
-  ${c}watch${x}   ${d}·${x} watch files and auto-dispatch on changes
-  ${c}--mode${x}  ${d}·${x} review | test | fix | docs   ${d}mia watch --mode test${x}
-  ${c}--prompt${x} ${d}·${x} custom prompt template       ${d}mia watch --prompt "Review: {files}"${x}
-  ${c}--debounce${x} ${d}·${x} ms after last change       ${d}mia watch --debounce 3000${x}
-  ${c}--dry-run${x} ${d}·${x} preview without dispatching
-  ${c}--no-context${x} ${d}·${x} skip workspace context (faster)
-  ${c}--min-interval${x} ${d}·${x} minimum ms between dispatches
-
-  ${d}recap${x}
-  ${c}recap${x}            ${d}·${x} daily digest for today
-  ${c}--yesterday${x}      ${d}·${x} digest for yesterday           ${d}mia recap --yesterday${x}
-  ${c}--date${x}           ${d}·${x} digest for a specific date     ${d}mia recap --date 2026-01-15${x}
-  ${c}--json${x}           ${d}·${x} machine-readable JSON output
 
   ${d}config${x}
   ${c}config${x}          ${d}·${x} show current configuration
@@ -143,16 +110,6 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
   ${c}--push${x}          ${d}·${x} commit and push            ${d}mia commit --push${x}
   ${c}--yes${x}           ${d}·${x} skip confirmation prompt
   ${c}--message-only${x}  ${d}·${x} print just the message     ${d}mia commit --message-only${x}
-
-  ${d}pr${x}
-  ${c}pr${x}              ${d}·${x} ai-generated pull request title and description
-  ${c}--base${x}          ${d}·${x} base branch (auto-detected if omitted)   ${d}mia pr --base main${x}
-  ${c}--draft${x}         ${d}·${x} create as a draft PR
-  ${c}--dry-run${x}       ${d}·${x} show PR content, don't create            ${d}mia pr --dry-run${x}
-  ${c}--push${x}          ${d}·${x} push branch before creating PR
-  ${c}--yes${x}           ${d}·${x} skip confirmation prompt
-  ${c}--web${x}           ${d}·${x} open PR in browser after creation
-  ${c}--title-only${x}    ${d}·${x} print just the title                     ${d}mia pr --title-only${x}
 
   ${d}standup${x}
   ${c}standup${x}         ${d}·${x} ai standup from recent commits and Mia activity
@@ -169,144 +126,6 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
   ${c}--to${x}            ${d}·${x} end ref (default: HEAD)                  ${d}mia changelog --to v2.0.0${x}
   ${c}--version${x}       ${d}·${x} version label                            ${d}mia changelog --version 1.3.0${x}
   ${c}--write${x}         ${d}·${x} prepend entry to CHANGELOG.md            ${d}mia changelog --write${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}explain${x}
-  ${c}explain${x} ${d}<file>${x}     ${d}·${x} explain what a file does              ${d}mia explain src/auth.ts${x}
-  ${c}explain${x} ${d}<dir>${x}      ${d}·${x} explain a whole directory             ${d}mia explain src/auth/${x}
-  ${c}--fn${x}            ${d}·${x} focus on a specific function/class    ${d}mia explain auth.ts --fn verifyToken${x}
-  ${c}--query${x}         ${d}·${x} explain a concept or question         ${d}mia explain --query "how auth works"${x}
-  ${c}--depth${x}         ${d}·${x} shallow | normal (default) | deep     ${d}mia explain auth.ts --depth deep${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}test${x}
-  ${c}test${x} ${d}<file>${x}        ${d}·${x} generate a test file for a source file   ${d}mia test src/utils.ts${x}
-  ${c}--write${x}         ${d}·${x} write test file to disk (alongside source)
-  ${c}--run${x}           ${d}·${x} write and immediately run the tests       ${d}mia test src/utils.ts --run${x}
-  ${c}--output${x}        ${d}·${x} custom output path                        ${d}mia test src/utils.ts --output out.test.ts${x}
-  ${c}--runner${x}        ${d}·${x} vitest | jest | mocha | node (auto-detected)
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}review${x}
-  ${c}review${x}          ${d}·${x} ai code review with verdict: LGTM | MINOR_ISSUES | NEEDS_WORK
-  ${c}--staged${x}        ${d}·${x} review staged changes only                ${d}mia review --staged${x}
-  ${c}--unstaged${x}      ${d}·${x} review unstaged changes only              ${d}mia review --unstaged${x}
-  ${c}--base${x}          ${d}·${x} review branch diff vs base                ${d}mia review --base main${x}
-  ${c}--file${x}          ${d}·${x} scope review to a single file             ${d}mia review --file src/auth.ts${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}search${x}
-  ${c}search${x} ${d}<query>${x}    ${d}·${x} semantic code search — find files by natural language    ${d}mia search "where is auth handled"${x}
-  ${c}--files${x}         ${d}·${x} output file paths only (pipe-friendly)    ${d}mia search --files "auth" | xargs mia explain${x}
-  ${c}--limit${x}         ${d}·${x} max results (default 8, max 20)           ${d}mia search --limit 5 "payments"${x}
-  ${c}--pattern${x}       ${d}·${x} filter files by glob before searching     ${d}mia search --pattern "*.ts" "async queue"${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}debug${x}
-  ${c}debug${x} ${d}<error>${x}     ${d}·${x} AI error forensics — root cause, location, fix    ${d}mia debug "TypeError: foo is undefined"${x}
-  ${c}--file${x}          ${d}·${x} scope code reading to a specific file    ${d}mia debug --file src/auth.ts "null ref"${x}
-  ${c}--depth${x}         ${d}·${x} shallow | normal (default) | deep        ${d}mia debug --depth deep "ECONNREFUSED"${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping              ${d}npm test 2>&1 | mia debug --raw${x}
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}refactor${x}
-  ${c}refactor${x} ${d}<file>${x}     ${d}·${x} AI-powered code refactoring — explain changes + optionally apply    ${d}mia refactor src/auth.ts "split into smaller functions"${x}
-  ${c}--goal${x}          ${d}·${x} refactoring goal as a named flag            ${d}mia refactor src/utils.ts --goal "modernize async/await"${x}
-  ${c}--write${x}         ${d}·${x} apply the refactored code back to disk      ${d}mia refactor src/utils.ts "improve errors" --write${x}
-  ${c}--no-backup${x}     ${d}·${x} skip the .bak backup when using --write
-  ${c}--diff${x}          ${d}·${x} show a coloured unified diff after write    ${d}mia refactor src/db.ts --write --diff${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping                ${d}mia refactor src/auth.ts --raw "goal" | tee refactored.ts${x}
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}scaffold${x}
-  ${c}scaffold${x} ${d}<path>${x}     ${d}·${x} AI code scaffolding — generate a new file following your codebase patterns    ${d}mia scaffold src/utils/date.ts "date formatting"${x}
-  ${c}--desc${x}          ${d}·${x} description as a named flag                 ${d}mia scaffold src/services/email.ts --desc "email sender"${x}
-  ${c}--examples${x}      ${d}·${x} comma-separated example files (auto-detected if omitted)    ${d}mia scaffold src/s.ts --examples src/a.ts,src/b.ts${x}
-  ${c}--max-examples${x}  ${d}·${x} max pattern files to include (default: 3)
-  ${c}--write${x}         ${d}·${x} write scaffolded code to disk               ${d}mia scaffold src/utils/date.ts --write${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}migrate${x}
-  ${c}migrate${x} ${d}<goal>${x}      ${d}·${x} AI codebase-wide migration — apply a consistent change across many files    ${d}mia migrate "convert require() to import" --dir src${x}
-  ${c}--dir${x}           ${d}·${x} directory to scan (default: cwd)               ${d}mia migrate "replace var with const" --dir src${x}
-  ${c}--files${x}         ${d}·${x} comma-separated files to migrate               ${d}mia migrate "add JSDoc" --files src/a.ts,src/b.ts${x}
-  ${c}--ext${x}           ${d}·${x} extensions to include (default: .ts,.tsx,.js,.jsx)    ${d}mia migrate "modernize" --ext .ts,.js${x}
-  ${c}--max-files${x}     ${d}·${x} max files to process (default: 15)             ${d}mia migrate "goal" --max-files 30${x}
-  ${c}--write${x}         ${d}·${x} apply migrated code to disk                    ${d}mia migrate "goal" --dir src --write${x}
-  ${c}--diff${x}          ${d}·${x} show per-file unified diff after write          ${d}mia migrate "goal" --write --diff${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt for first file, no dispatch
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}suggest${x}
-  ${c}suggest${x} ${d}<file|dir>${x}  ${d}·${x} AI proactive improvement suggestions — security, perf, types, tests, maintainability    ${d}mia suggest src/auth.ts${x}
-  ${c}--category${x}      ${d}·${x} security | perf | types | tests | maintainability | all (default: all)    ${d}mia suggest src/auth.ts --category security${x}
-  ${c}--limit${x}         ${d}·${x} max suggestions to return (default: 10)        ${d}mia suggest src/ --limit 5${x}
-  ${c}--apply${x}         ${d}·${x} refactor and write back high-priority fixes     ${d}mia suggest src/auth.ts --apply${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}plan${x}
-  ${c}plan${x} ${d}<goal>${x}       ${d}·${x} AI task decomposition — break a complex goal into numbered, prioritised steps    ${d}mia plan "migrate from Express to Fastify"${x}
-  ${c}--depth${x}         ${d}·${x} shallow | normal (default) | deep                     ${d}mia plan "add OAuth" --depth deep${x}
-  ${c}--write${x}         ${d}·${x} save plan to plan.md                                  ${d}mia plan "add OAuth" --write${x}
-  ${c}--output${x}        ${d}·${x} custom output file (implies --write)                  ${d}mia plan "add OAuth" --output my-plan.md${x}
-  ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}task${x}
-  ${c}task${x} ${d}<goal>${x}         ${d}·${x} AI multi-step autonomous task execution — plan + execute a high-level goal    ${d}mia task "add JWT auth to the API"${x}
-  ${c}--max-steps${x}     ${d}·${x} cap the number of execution steps (default: 8, max: 12)    ${d}mia task "goal" --max-steps 5${x}
-  ${c}--dry-run${x}       ${d}·${x} plan only — show steps without executing        ${d}mia task "goal" --dry-run${x}
-  ${c}--raw${x}           ${d}·${x} plain text output for piping / logging
-  ${c}--no-context${x}    ${d}·${x} skip workspace context during planning (faster)
-  ${c}--cwd${x}           ${d}·${x} working directory (default: cwd)                ${d}mia task "add tests" --cwd ~/project${x}
-
-  ${d}todo${x}
-  ${c}todo${x}            ${d}·${x} scan codebase for TODO/FIXME/HACK/XXX/BUG debt markers and optionally resolve them with AI    ${d}mia todo${x}
-  ${c}--path${x}          ${d}·${x} limit scan to a sub-path                    ${d}mia todo --path src/auth/${x}
-  ${c}--type${x}          ${d}·${x} filter types (comma-sep)                    ${d}mia todo --type fixme,bug${x}
-  ${c}--fix${x} ${d}<n>${x}       ${d}·${x} AI-resolve item #n with surrounding context ${d}mia todo --fix 3${x}
-  ${c}--analyze${x}       ${d}·${x} AI-prioritise all found markers             ${d}mia todo --analyze${x}
-  ${c}--limit${x}         ${d}·${x} max items shown (default: 50)               ${d}mia todo --limit 20${x}
-  ${c}--dry-run${x}       ${d}·${x} (--fix / --analyze) show prompt, no dispatch
-  ${c}--raw${x}           ${d}·${x} plain text output for piping                ${d}mia todo --raw | grep FIXME${x}
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}audit${x}
-  ${c}audit${x}           ${d}·${x} security audit: package vulns, secret scanning, AI-synthesized report
-  ${c}--dir${x}           ${d}·${x} project directory (default: cwd)          ${d}mia audit --dir ~/project${x}
-  ${c}--no-secrets${x}    ${d}·${x} skip secret / credential scanning
-  ${c}--no-deps${x}       ${d}·${x} skip package vulnerability scan
-  ${c}--dry-run${x}       ${d}·${x} show gathered data without dispatching
-  ${c}--raw${x}           ${d}·${x} plain text output for piping              ${d}mia audit --raw > report.txt${x}
-  ${c}--json${x}          ${d}·${x} machine-readable JSON output
-  ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
-
-  ${d}coverage${x}
-  ${c}coverage${x}         ${d}·${x} coverage-aware test generation — reads Istanbul/v8 report, generates targeted tests for uncovered code
-  ${c}coverage${x} ${d}<file>${x}  ${d}·${x} target a specific file                       ${d}mia coverage src/utils.ts${x}
-  ${c}--report${x}        ${d}·${x} path to coverage-final.json (auto-detected)   ${d}mia coverage --report coverage/coverage-final.json${x}
-  ${c}--threshold${x}     ${d}·${x} target files below N% coverage (default: 80)  ${d}mia coverage --threshold 90${x}
-  ${c}--limit${x}         ${d}·${x} max files to process (default: 3)             ${d}mia coverage --limit 5${x}
-  ${c}--write${x}         ${d}·${x} write generated test file(s) to disk          ${d}mia coverage --write${x}
-  ${c}--run${x}           ${d}·${x} write and immediately run the tests            ${d}mia coverage --write --run${x}
   ${c}--dry-run${x}       ${d}·${x} show prompt without dispatching
   ${c}--raw${x}           ${d}·${x} plain text output for piping
   ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
@@ -358,30 +177,11 @@ if (command === 'setup') {
     chat:      () => h.handleChatCommand(args),
     memory:    () => h.handleMemoryCommand(args),
     log:       () => h.handleLogCommand(args),
-    watch:     () => h.handleWatchCommand(args),
-    run:       () => h.handleRunCommand(args),
     doctor:    () => h.handleDoctorCommand(),
-    fix:       () => h.handleFixCommand(args),
-    recap:     () => h.handleRecapCommand(args),
     config:    () => h.handleConfigCommand(args),
     commit:    () => h.handleCommitCommand(args),
-    pr:        () => h.handlePrCommand(args),
     standup:   () => h.handleStandupCommand(args),
     changelog: () => h.handleChangelogCommand(args),
-    explain:   () => h.handleExplainCommand(args),
-    test:      () => h.handleTestCommand(args),
-    review:    () => h.handleReviewCommand(args),
-    search:    () => h.handleSearchCommand(args),
-    debug:     () => h.handleDebugCommand(args),
-    refactor:  () => h.handleRefactorCommand(args),
-    scaffold:  () => h.handleScaffoldCommand(args),
-    migrate:   () => h.handleMigrateCommand(args),
-    suggest:   () => h.handleSuggestCommand(args),
-    plan:      () => h.handlePlanCommand(args),
-    task:      () => h.handleTaskCommand(args),
-    todo:      () => h.handleTodoCommand(args),
-    audit:     () => h.handleAuditCommand(args),
-    coverage:  () => h.handleCoverageCommand(args),
   };
   await dispatch[command]();
   process.exit(0);

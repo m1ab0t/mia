@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A distributed AI coding assistant with P2P networking, pluggable coding agent support, and 30+ developer workflow commands.
+A distributed AI coding assistant with P2P networking, pluggable coding agent support, and developer workflow commands.
 
 > mia knows your codebase, syncs across devices, and delegates specialized coding tasks to best-in-class coding agents.
 
@@ -28,7 +28,7 @@ mia is a distributed AI coding agent that runs on your machine, syncs across dev
 
 **Key Features:**
 - **Pluggable Backends**: Claude Code, Gemini, OpenCode, or OpenAI Codex — switch at any time
-- **30+ AI Workflow Commands**: `commit`, `pr`, `review`, `test`, `debug`, `refactor`, `scaffold`, `migrate`, `plan`, `task`, and more
+- **AI Workflow Commands**: `commit`, `standup`, `changelog`, and more
 - **P2P Sync**: Conversations sync in real-time across CLI and mobile using Hyperswarm DHT
 - **Daemon + Scheduler**: Background service with cron-based task scheduling
 - **Vector Memory**: Persistent memory across sessions via LanceDB with ONNX reranking
@@ -109,27 +109,8 @@ mia restart
 | `mia setup` | First-time setup wizard |
 | `mia start / stop / restart / status / logs` | Daemon lifecycle |
 | `mia commit` | AI-generated commit message from staged diff |
-| `mia pr` | AI-generated PR title and description, created via `gh` |
-| `mia review` | AI code review — verdict: LGTM / MINOR_ISSUES / NEEDS_WORK |
 | `mia standup` | AI standup from recent commits and mia activity |
 | `mia changelog` | AI-generated changelog from git history |
-| `mia explain <file\|dir>` | Explain any file, directory, function, or concept |
-| `mia test <file>` | Generate a test file for a source file |
-| `mia debug <error>` | Error forensics — root cause, location, fix |
-| `mia refactor <file>` | Refactor code with optional write-back |
-| `mia scaffold <path>` | Generate a new file from codebase patterns |
-| `mia migrate <goal>` | Apply a consistent change across many files |
-| `mia suggest <file\|dir>` | Proactive improvement suggestions |
-| `mia plan <goal>` | Decompose a goal into prioritised steps |
-| `mia task <goal>` | Multi-step autonomous task execution |
-| `mia todo` | Scan and AI-resolve TODO/FIXME/HACK/XXX debt |
-| `mia audit` | Security audit: package vulns + secret scanning |
-| `mia coverage` | Coverage-aware test generation from Istanbul/v8 reports |
-| `mia search <query>` | Semantic code search by natural language |
-| `mia watch` | Watch files and auto-dispatch AI prompts on save |
-| `mia fix <cmd>` | Run a command and auto-fix failures in a loop |
-| `mia run <cmd>` | Run a command with optional auto-fix |
-| `mia recap` | Daily digest: dispatches, commits, tools used |
 | `mia doctor` | Workspace health diagnostics |
 | `mia config [get\|set]` | View and edit runtime configuration |
 | `mia log` | Recent dispatch history with git context |
