@@ -16,6 +16,7 @@ import type { MiaConfig } from '../config';
 import { readMiaConfig, writeMiaConfig } from '../config/mia-config.js';
 import { DEFAULT_PLUGIN } from '../constants.js';
 import type { CodingPlugin, CodingPluginCallbacks, DispatchOptions, PluginContext, PluginDispatchResult } from './types';
+import { PluginError, PluginErrorCode } from './types.js';
 import type { PluginRegistry } from './registry';
 
 /** Shape of a plugin entry returned to mobile and CLI consumers. */
@@ -233,10 +234,28 @@ export class PluginDispatcher {
       result = await plugin.dispatch(prompt, context, dispatchOptions, internalCallbacks);
     } catch (error: unknown) {
       const errorMsg = error instanceof Error ? error.message : String(error);
+      const taskId = `error-${Date.now()}`;
+
+      // Classify the exception: if the plugin already threw a PluginError,
+      // preserve its code; otherwise wrap as UNKNOWN so mobile clients get a
+      // machine-readable error category instead of an opaque string.
+      const pluginError = error instanceof PluginError
+        ? error
+        : new PluginError(
+            `Plugin dispatch error: ${errorMsg}`,
+            PluginErrorCode.UNKNOWN,
+            plugin.name,
+            error,
+          );
+
+      // Emit onError so P2P / mobile listeners see the failure in real time,
+      // not just as a result.success=false after the fact.
+      internalCallbacks.onError(pluginError, taskId);
+
       result = {
-        taskId: `error-${Date.now()}`,
+        taskId,
         success: false,
-        output: `Plugin dispatch error: ${errorMsg}`,
+        output: pluginError.message,
         durationMs: 0,
       };
     }

@@ -3,6 +3,7 @@ import { PluginDispatcher } from '../dispatcher';
 import { PluginRegistry } from '../registry';
 import { writeMiaConfig } from '../../config/mia-config.js';
 import type { CodingPlugin, PluginContext, PluginDispatchResult } from '../types';
+import { PluginError, PluginErrorCode } from '../types';
 import type { ContextPreparer } from '../context-preparer';
 import type { TraceLogger } from '../trace-logger';
 import type { PostDispatchVerifier } from '../verifier';
@@ -524,6 +525,56 @@ describe('PluginDispatcher', () => {
       );
       await dispatcher.dispatch('broken task', 'conv-on-error', {}, { onError });
       expect(onError).toHaveBeenCalledWith(err, mockResult.taskId);
+    });
+  });
+
+  // ── Dispatch error wrapping ─────────────────────────────────────────────
+
+  describe('dispatch error wrapping', () => {
+    it('wraps unhandled dispatch exceptions as PluginError with UNKNOWN code', async () => {
+      const onError = vi.fn();
+      (plugin.dispatch as MockedFunction<typeof plugin.dispatch>).mockRejectedValueOnce(
+        new Error('Unexpected crash')
+      );
+
+      const result = await dispatcher.dispatch('crash task', 'conv-wrap', {}, { onError });
+
+      expect(result.success).toBe(false);
+      expect(result.output).toContain('Unexpected crash');
+      // The critical assertion: onError was called with a PluginError, not a plain Error
+      expect(onError).toHaveBeenCalledTimes(1);
+      const errArg = onError.mock.calls[0][0];
+      expect(errArg).toBeInstanceOf(PluginError);
+      expect(errArg.code).toBe(PluginErrorCode.UNKNOWN);
+      expect(errArg.plugin).toBe('claude-code');
+    });
+
+    it('preserves the original PluginError code when the plugin throws a PluginError', async () => {
+      const onError = vi.fn();
+      const originalError = new PluginError('Auth failed', PluginErrorCode.PROVIDER_ERROR, 'claude-code');
+      (plugin.dispatch as MockedFunction<typeof plugin.dispatch>).mockRejectedValueOnce(originalError);
+
+      const result = await dispatcher.dispatch('auth fail', 'conv-preserve', {}, { onError });
+
+      expect(result.success).toBe(false);
+      expect(onError).toHaveBeenCalledTimes(1);
+      const errArg = onError.mock.calls[0][0];
+      expect(errArg).toBeInstanceOf(PluginError);
+      expect(errArg.code).toBe(PluginErrorCode.PROVIDER_ERROR);
+      expect(errArg).toBe(originalError); // same instance, not re-wrapped
+    });
+
+    it('emits onError callback for unhandled exceptions (not just success=false in result)', async () => {
+      const onError = vi.fn();
+      (plugin.dispatch as MockedFunction<typeof plugin.dispatch>).mockRejectedValueOnce(
+        new TypeError('Cannot read property of undefined')
+      );
+
+      await dispatcher.dispatch('broken task', 'conv-emit', {}, { onError });
+
+      // Before this fix, onError was never called for unhandled exceptions —
+      // only result.success was false. Now mobile clients see the error in real time.
+      expect(onError).toHaveBeenCalledTimes(1);
     });
   });
 });
