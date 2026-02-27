@@ -683,11 +683,11 @@ describe('MemoryStore convenience helpers', () => {
 
   it('storeFact() stores with type="fact" and captures source', async () => {
     const store = await makeConnectedStore();
-    await store.storeFact('TypeScript is great', 'rjmacarthy');
+    await store.storeFact('TypeScript is great', 'test-user');
 
     const rows = mockDb.createTable.mock.calls[0][1] as Record<string, unknown>[];
     expect(rows[0].type).toBe('fact');
-    expect(JSON.parse(rows[0].metadata as string)).toEqual({ source: 'rjmacarthy' });
+    expect(JSON.parse(rows[0].metadata as string)).toEqual({ source: 'test-user' });
   });
 
   it('storeFact() works without a source argument', async () => {

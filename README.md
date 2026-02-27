@@ -56,7 +56,7 @@ mia plugin info gemini
 mia is installed from source.
 
 ```bash
-git clone https://github.com/rjmacarthy/mia.git
+git clone https://github.com/m1ab0t/mia.git
 cd mia
 npm install
 npm run build

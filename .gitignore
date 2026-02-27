@@ -7,7 +7,6 @@ coverage/
 .vscode/
 .idea/
 .claude/
-!CLAUDE.md
 .mia
 .opencode
 .agents

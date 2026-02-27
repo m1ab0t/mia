@@ -417,7 +417,9 @@ describe('ContextManager.buildSystemPrompt()', () => {
     mockFormatToneForPrompt.mockReturnValue('');
     const manager = makeManager('coding');
     await manager.init();
+    const prompt = manager.buildSystemPrompt([]);
     expect(mockFormatToneForPrompt).toHaveBeenCalledWith('neutral');
+    expect(prompt).not.toContain('TONE:');
   });
 
   it('combines base memory and turn memory in the prompt', async () => {

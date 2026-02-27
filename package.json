@@ -1,13 +1,26 @@
 {
   "name": "mia",
   "version": "2.0.0",
-  "private": true,
-  "description": "Mia - AI Agent",
+  "description": "Mia - Token-efficient AI coding agent powered by Claude",
   "main": "dist/index.js",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/m1ab0t/mia.git"
+  },
+  "homepage": "https://github.com/m1ab0t/mia",
+  "bugs": {
+    "url": "https://github.com/m1ab0t/mia/issues"
+  },
   "bin": {
     "mia": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "models",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "setup": "bash scripts/setup.sh",
     "build": "node scripts/build.mjs && tsc --emitDeclarationOnly",
@@ -34,7 +47,7 @@
     "anthropic",
     "claude"
   ],
-  "author": "Cloud",
+  "author": "m1ab0t",
   "license": "Apache-2.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
