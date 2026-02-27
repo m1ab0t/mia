@@ -95,12 +95,126 @@ export type MobileInbound =
   | { type: 'suggestion_complete'; id: string }
   | { type: 'daily_greeting_request' };
 
+// ── Runtime field helpers ──────────────────────────────────────────────
+// Tiny predicates used by the per-type validators below.
+
+type R = Record<string, unknown>;
+
+const isStr = (v: unknown): v is string => typeof v === 'string';
+const isNum = (v: unknown): v is number => typeof v === 'number';
+const isStrArr = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+// ── Per-type validators ───────────────────────────────────────────────
+// Each entry validates the required fields for its MobileInbound variant
+// and returns the narrowed type — or `null` on a shape mismatch.
+//
+// Optional fields (e.g. `timeoutMs`) are coerced or stripped; their
+// absence never causes a rejection.
+
+const validators: Record<string, (o: R) => MobileInbound | null> = {
+  // No-payload types
+  ping: () => ({ type: 'ping' }),
+  pong: () => ({ type: 'pong' }),
+  conversations_request: () => ({ type: 'conversations_request' }),
+  new_conversation: () => ({ type: 'new_conversation' }),
+  plugins_request: () => ({ type: 'plugins_request' }),
+  scheduler_list_request: () => ({ type: 'scheduler_list_request' }),
+  restart_request: () => ({ type: 'restart_request' }),
+  suggestions_request: () => ({ type: 'suggestions_request' }),
+  suggestions_refresh: () => ({ type: 'suggestions_refresh' }),
+  delete_all_conversations: () => ({ type: 'delete_all_conversations' }),
+  daily_greeting_request: () => ({ type: 'daily_greeting_request' }),
+
+  // Single string-id types
+  load_conversation: (o) =>
+    isStr(o.conversationId)
+      ? { type: 'load_conversation', conversationId: o.conversationId }
+      : null,
+  delete_conversation: (o) =>
+    isStr(o.conversationId)
+      ? { type: 'delete_conversation', conversationId: o.conversationId }
+      : null,
+  plugin_switch: (o) =>
+    isStr(o.name) ? { type: 'plugin_switch', name: o.name } : null,
+  scheduler_toggle: (o) =>
+    isStr(o.id) ? { type: 'scheduler_toggle', id: o.id } : null,
+  scheduler_delete: (o) =>
+    isStr(o.id) ? { type: 'scheduler_delete', id: o.id } : null,
+  scheduler_run: (o) =>
+    isStr(o.id) ? { type: 'scheduler_run', id: o.id } : null,
+  suggestion_dismiss: (o) =>
+    isStr(o.id) ? { type: 'suggestion_dismiss', id: o.id } : null,
+  suggestion_complete: (o) =>
+    isStr(o.id) ? { type: 'suggestion_complete', id: o.id } : null,
+
+  // Multi-field types
+  history_request: (o) =>
+    isStr(o.conversationId) && isNum(o.before) && isNum(o.limit)
+      ? {
+          type: 'history_request',
+          conversationId: o.conversationId,
+          before: o.before,
+          limit: o.limit,
+        }
+      : null,
+
+  rename_conversation: (o) =>
+    isStr(o.conversationId) && isStr(o.title)
+      ? {
+          type: 'rename_conversation',
+          conversationId: o.conversationId,
+          title: o.title,
+        }
+      : null,
+
+  delete_multiple_conversations: (o) =>
+    isStrArr(o.conversationIds)
+      ? {
+          type: 'delete_multiple_conversations',
+          conversationIds: o.conversationIds,
+        }
+      : null,
+
+  search_request: (o) =>
+    isStr(o.query) && isStr(o.requestId)
+      ? { type: 'search_request', query: o.query, requestId: o.requestId }
+      : null,
+
+  scheduler_create: (o) =>
+    isStr(o.name) && isStr(o.cronExpression) && isStr(o.taskPrompt)
+      ? {
+          type: 'scheduler_create',
+          name: o.name,
+          cronExpression: o.cronExpression,
+          taskPrompt: o.taskPrompt,
+          ...(isNum(o.timeoutMs) && { timeoutMs: o.timeoutMs }),
+        }
+      : null,
+
+  scheduler_update: (o) =>
+    isStr(o.id) && isStr(o.taskPrompt)
+      ? {
+          type: 'scheduler_update',
+          id: o.id,
+          taskPrompt: o.taskPrompt,
+          ...(isStr(o.name) && { name: o.name }),
+          ...(isStr(o.cronExpression) && {
+            cronExpression: o.cronExpression,
+          }),
+          ...(isNum(o.timeoutMs) && { timeoutMs: o.timeoutMs }),
+        }
+      : null,
+};
+
 /**
  * Safely parse a raw P2P frame into a typed `MobileInbound` control message.
  *
  * Returns `null` when:
  *   - The string is not valid JSON
  *   - The parsed value is not an object with a string `type` field
+ *   - The `type` is not a recognised `MobileInbound` variant
+ *   - Required fields for the variant are missing or have wrong types
  *
  * Callers must handle plain-text user messages and the legacy image-attachment
  * format (`{ image: { data, mimeType }, text? }`) separately.
@@ -112,11 +226,13 @@ export function parseMobileInbound(raw: string): MobileInbound | null {
       typeof parsed !== 'object' ||
       parsed === null ||
       !('type' in parsed) ||
-      typeof (parsed as Record<string, unknown>).type !== 'string'
+      typeof (parsed as R).type !== 'string'
     ) {
       return null;
     }
-    return parsed as MobileInbound;
+    const obj = parsed as R;
+    const validate = validators[obj.type as string];
+    return validate ? validate(obj) : null;
   } catch {
     return null;
   }
