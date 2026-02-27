@@ -3,6 +3,7 @@
  */
 
 export {
+  resolveCwd,
   scanWorkspace,
   scanGitState,
   type GitState,

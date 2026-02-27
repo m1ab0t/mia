@@ -9,9 +9,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, basename } from 'path';
 
 // ── Mock child_process so no real git subprocess is spawned ──────────────────
 
@@ -21,7 +21,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 import { execSync } from 'child_process';
-import { scanGitState, scanWorkspace, stopWatcher } from './workspace-scanner';
+import { resolveCwd, scanGitState, scanWorkspace, stopWatcher } from './workspace-scanner';
 
 const mockExecSync = vi.mocked(execSync);
 
@@ -58,6 +58,64 @@ function setupGitMock(branch = 'main', statusOutput = '', logOutput = ''): void 
     return '';
   });
 }
+
+// ── resolveCwd — path validation ──────────────────────────────────────────────
+
+describe('resolveCwd — path validation', () => {
+  it('returns the real path for a valid directory', () => {
+    expect(resolveCwd(tmpDir)).toBe(tmpDir);
+  });
+
+  it('resolves symlinks to the real directory path', () => {
+    const linkPath = join(tmpDir, 'link-to-self');
+    const targetDir = mkdtempSync(join(tmpdir(), 'mia-ws-resolve-'));
+    try {
+      symlinkSync(targetDir, linkPath);
+      expect(resolveCwd(linkPath)).toBe(targetDir);
+    } finally {
+      rmSync(linkPath, { force: true });
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws for a path that does not exist', () => {
+    expect(() => resolveCwd('/no/such/path/ever')).toThrow('does not exist');
+  });
+
+  it('throws when the path points to a file, not a directory', () => {
+    const filePath = join(tmpDir, 'not-a-dir.txt');
+    writeFileSync(filePath, 'hello');
+    expect(() => resolveCwd(filePath)).toThrow('not a directory');
+  });
+});
+
+// ── scanWorkspace — cwd validation ───────────────────────────────────────────
+
+describe('scanWorkspace — cwd validation', () => {
+  it('throws for a non-existent path', () => {
+    expect(() => scanWorkspace('/tmp/no-such-dir-xyz')).toThrow('does not exist');
+  });
+
+  it('throws when given a file instead of a directory', () => {
+    const filePath = join(tmpDir, 'file.txt');
+    writeFileSync(filePath, '');
+    expect(() => scanWorkspace(filePath)).toThrow('not a directory');
+  });
+
+  it('resolves symlinks and stores the real path in snapshot.cwd', () => {
+    const realDir = mkdtempSync(join(tmpdir(), 'mia-ws-real-'));
+    const linkPath = join(tmpDir, 'symlink-dir');
+    try {
+      symlinkSync(realDir, linkPath);
+      const snap = scanWorkspace(linkPath);
+      expect(snap.cwd).toBe(realDir);
+    } finally {
+      stopWatcher(realDir);
+      rmSync(linkPath, { force: true });
+      rmSync(realDir, { recursive: true, force: true });
+    }
+  });
+});
 
 // ── scanGitState — non-git directory ─────────────────────────────────────────
 

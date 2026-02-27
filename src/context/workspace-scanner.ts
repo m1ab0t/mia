@@ -3,10 +3,38 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync, readdirSync, statSync, watch as fsWatch } from 'fs';
+import { existsSync, readdirSync, realpathSync, statSync, watch as fsWatch } from 'fs';
 import type { FSWatcher } from 'fs';
 import { join, relative } from 'path';
 import { splitLines } from '../utils/string-helpers';
+
+/**
+ * Resolve and validate a cwd path.
+ * - Resolves symlinks via realpathSync
+ * - Verifies the resolved path is a readable directory
+ * Throws if the path is invalid, missing, or not a directory.
+ */
+export function resolveCwd(raw: string): string {
+  let resolved: string;
+  try {
+    resolved = realpathSync(raw);
+  } catch {
+    throw new Error(`--cwd path does not exist or is not accessible: ${raw}`);
+  }
+
+  let stats;
+  try {
+    stats = statSync(resolved);
+  } catch {
+    throw new Error(`--cwd path is not readable: ${resolved}`);
+  }
+
+  if (!stats.isDirectory()) {
+    throw new Error(`--cwd path is not a directory: ${resolved}`);
+  }
+
+  return resolved;
+}
 
 export interface GitState {
   isRepo: boolean;
@@ -327,12 +355,15 @@ export function stopWatcher(cwd: string): void {
  * keeping context fresh without waiting for TTL expiry.
  */
 export function scanWorkspace(cwd: string): WorkspaceSnapshot {
-  const cached = snapshotCache.get(cwd);
+  // Resolve symlinks and validate the path is a readable directory
+  const resolved = resolveCwd(cwd);
+
+  const cached = snapshotCache.get(resolved);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached;
   }
 
-  const git = scanGitState(cwd);
+  const git = scanGitState(resolved);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -345,13 +376,13 @@ export function scanWorkspace(cwd: string): WorkspaceSnapshot {
     configFiles: [] as string[],
   };
   try {
-    fileData = scanDirectory(cwd, cwd, 4, 0, controller.signal);
+    fileData = scanDirectory(resolved, resolved, 4, 0, controller.signal);
   } finally {
     clearTimeout(timeoutId);
   }
 
   const snapshot: WorkspaceSnapshot = {
-    cwd,
+    cwd: resolved,
     timestamp: Date.now(),
     git,
     files: {
@@ -361,15 +392,15 @@ export function scanWorkspace(cwd: string): WorkspaceSnapshot {
       largeFiles: fileData.largeFiles.slice(0, 5),
       configFiles: fileData.configFiles,
     },
-    projectType: detectProjectType(cwd),
-    entryPoints: findEntryPoints(cwd),
+    projectType: detectProjectType(resolved),
+    entryPoints: findEntryPoints(resolved),
   };
 
-  snapshotCache.set(cwd, snapshot);
+  snapshotCache.set(resolved, snapshot);
 
   // Arm the watcher after the first scan so subsequent changes invalidate
   // the cache without waiting for the 30-second TTL.
-  startWatcher(cwd);
+  startWatcher(resolved);
 
   return snapshot;
 }
