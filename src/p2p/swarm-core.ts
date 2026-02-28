@@ -140,6 +140,11 @@ function truncateToolInput(input: unknown, maxFieldLen = 200_000): string {
   return JSON.stringify(clamp(input));
 }
 
+/** Resolve the effective conversation ID, falling back to the current active conversation. */
+function resolveConvId(explicit?: string | null): string | null {
+  return explicit ?? currentConversationId;
+}
+
 // ── Module-level mutable state ────────────────────────────────────────
 
 let swarm: Hyperswarm | null = null;
@@ -330,7 +335,7 @@ export function broadcastSuggestions(suggestions: SuggestionInfo[], greetings: s
 
 /** Broadcast current task status to all peers (e.g. on reconnect). */
 export function broadcastTaskStatus(running: boolean, conversationId?: string): void {
-  sendToAll({ type: 'task_status', running, conversationId: conversationId ?? currentConversationId });
+  sendToAll({ type: 'task_status', running, conversationId: resolveConvId(conversationId) });
 }
 
 /** Broadcast plugin_switched to all peers (e.g. after a CLI-triggered switch). */
@@ -398,7 +403,7 @@ export async function sendP2PMessage(message: string): Promise<void> {
 
 export async function sendP2PRawToken(token: string, conversationId?: string): Promise<void> {
   currentAssistantText += token;
-  sendToAll({ type: 'raw_token', token, conversationId: conversationId ?? currentConversationId });
+  sendToAll({ type: 'raw_token', token, conversationId: resolveConvId(conversationId) });
 }
 
 export async function sendP2PToolCall(
@@ -414,7 +419,7 @@ export async function sendP2PToolCall(
   logger.debug(`[P2P] Sending tool_call: ${toolName} to ${connections.size} connections`);
   const toolCallId = metadata?.toolCallId || `${toolName}_${Date.now()}`;
   const now = Date.now();
-  const convId = conversationId ?? currentConversationId;
+  const convId = resolveConvId(conversationId);
   const inputObj = input as Record<string, unknown> | null;
 
   const resolvedFilePath =
@@ -479,7 +484,7 @@ export async function sendP2PToolResult(
   },
 ): Promise<void> {
   const now = Date.now();
-  const convId = conversationId ?? currentConversationId;
+  const convId = resolveConvId(conversationId);
 
   if (convId) {
     persistEntry({
@@ -514,7 +519,7 @@ export async function sendP2PToolResult(
 }
 
 export async function sendP2PThinking(content: string, conversationId?: string): Promise<void> {
-  const convId = conversationId ?? currentConversationId;
+  const convId = resolveConvId(conversationId);
   if (convId) {
     persistEntry({
       type: 'thinking',
@@ -527,7 +532,7 @@ export async function sendP2PThinking(content: string, conversationId?: string):
 }
 
 export async function sendP2PChatMessage(text: string, conversationId?: string): Promise<void> {
-  const convId = conversationId ?? currentConversationId;
+  const convId = resolveConvId(conversationId);
   const trimmed = text.trim();
   if (trimmed && convId) {
     persistEntry({
@@ -541,10 +546,12 @@ export async function sendP2PChatMessage(text: string, conversationId?: string):
   sendToAll({ type: 'chat_message', text, conversationId: convId });
 }
 
-export async function sendP2PResponse(message: string): Promise<void> {
-  const convId = currentConversationId;
-  const now = Date.now();
-
+/**
+ * Shared implementation for sendP2PResponse and sendP2PResponseForConversation.
+ * Clears the streaming buffer, persists the final text, tracks for echo
+ * suppression, broadcasts to peers, and triggers auto-naming.
+ */
+function sendResponseImpl(message: string, convId: string | null): void {
   // Clear the stream accumulation buffer — `message` is the authoritative
   // final text.  Saving both would produce a duplicate assistant_text entry.
   currentAssistantText = '';
@@ -553,14 +560,18 @@ export async function sendP2PResponse(message: string): Promise<void> {
     persistEntry({
       type: 'assistant_text',
       content: message,
-      timestamp: now,
+      timestamp: Date.now(),
       conversationId: convId,
     });
   }
 
   trackOutboundResponse(message);
   sendToAll({ type: 'response', message, conversationId: convId });
-  autoNameConversation(convId ?? undefined);
+  if (convId) autoNameConversation(convId);
+}
+
+export async function sendP2PResponse(message: string): Promise<void> {
+  sendResponseImpl(message, currentConversationId);
 }
 
 /**
@@ -571,19 +582,7 @@ export async function sendP2PResponseForConversation(
   message: string,
   conversationId: string,
 ): Promise<void> {
-  const now = Date.now();
-  currentAssistantText = '';
-
-  persistEntry({
-    type: 'assistant_text',
-    content: message,
-    timestamp: now,
-    conversationId,
-  });
-
-  trackOutboundResponse(message);
-  sendToAll({ type: 'response', message, conversationId });
-  autoNameConversation(conversationId);
+  sendResponseImpl(message, conversationId);
 }
 
 export async function sendP2PTokenUsage(
@@ -622,7 +621,7 @@ export async function sendP2PBashStream(
     toolCallId,
     chunk,
     stream,
-    conversationId: conversationId ?? currentConversationId,
+    conversationId: resolveConvId(conversationId),
     timestamp: Date.now(),
   });
 }
@@ -641,6 +640,92 @@ export function sendP2PSchedulerLog(
   sendToAll({ type: 'scheduler_log', level, message, taskId, taskName, elapsedMs });
 }
 
+// ── Swarm lifecycle helpers ───────────────────────────────────────────
+
+/**
+ * Initialize the message store and attempt to resume the most recent
+ * conversation.  If the most recent conversation is less than 1 hour old
+ * and has at least one message, it is resumed; otherwise a fresh
+ * conversation is created.
+ *
+ * Sets module-level state: messageStoreReady, currentConversationId,
+ * resumedConversationId.
+ */
+async function initStoreAndResumeConversation(): Promise<void> {
+  try {
+    await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Message store init');
+    messageStoreReady = true;
+    resumedConversationId = null;
+
+    let resumed = false;
+    try {
+      const recent = await getConversations(1);
+      if (recent.length > 0) {
+        const candidate = recent[0];
+        const age = Date.now() - candidate.updatedAt;
+        if (age < RESUME_RECENCY_MS && candidate.title !== 'New conversation') {
+          const messages = await getRecentMessages(candidate.id, 1);
+          if (messages.length > 0) {
+            currentConversationId = candidate.id;
+            resumedConversationId = candidate.id;
+            resumed = true;
+            logger.debug(`[P2P] Resumed conversation: ${candidate.id} ("${candidate.title}")`);
+          }
+        }
+      }
+    } catch (err: unknown) {
+      const errMsg = getErrorMessage(err);
+      logger.error({ err, errMsg }, '[P2P] Resume check failed, creating new');
+      if (errMsg.toLowerCase().includes('session is closed') || errMsg.includes('not initialized')) {
+        try {
+          await closeMessageStore();
+          await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Message store reinit');
+          messageStoreReady = true;
+        } catch (reinitErr) {
+          messageStoreReady = false;
+          logger.error({ err: reinitErr }, '[P2P] Message store reinit failed');
+        }
+      }
+    }
+
+    if (!resumed) {
+      if (messageStoreReady) {
+        const conv = await createConversation('New conversation');
+        currentConversationId = conv.id;
+        logger.debug({ conversationId: conv.id }, '[P2P] Message store initialized');
+      } else {
+        logger.debug('[P2P] Message store not available, will retry on first message');
+      }
+    }
+  } catch (err: unknown) {
+    messageStoreReady = false;
+    logger.error({ err }, '[P2P] Message store init failed');
+  }
+}
+
+/**
+ * Clean up a connection that has closed or errored: cancel its stability
+ * timer, detach listeners, remove from the connections Map and write-queue
+ * registry, and record the disconnect for backoff tracking.
+ *
+ * Returns `true` if the connection was still the active one for its key
+ * (i.e. cleanup actually happened), `false` if it was already replaced
+ * by a newer connection for the same peer.
+ */
+function teardownConnection(
+  conn: Duplex,
+  connKey: string,
+  stabilityTimer: ReturnType<typeof setTimeout>,
+): boolean {
+  clearTimeout(stabilityTimer);
+  conn.removeAllListeners();
+  if (connections.get(connKey) !== conn) return false;
+  connections.delete(connKey);
+  removePeerQueue(conn);
+  recordDisconnect(connKey);
+  return true;
+}
+
 // ── Swarm lifecycle ───────────────────────────────────────────────────
 
 export async function createP2PSwarm(): Promise<{ success: boolean; key?: string; error?: string }> {
@@ -649,56 +734,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       return { success: false, error: ERROR_SWARM_ALREADY_RUNNING };
     }
 
-    // ── Initialise message store and optionally resume a conversation ─────
-    try {
-      await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Message store init');
-      messageStoreReady = true;
-      resumedConversationId = null;
-
-      let resumed = false;
-      try {
-        const recent = await getConversations(1);
-        if (recent.length > 0) {
-          const candidate = recent[0];
-          const age = Date.now() - candidate.updatedAt;
-          if (age < RESUME_RECENCY_MS && candidate.title !== 'New conversation') {
-            const messages = await getRecentMessages(candidate.id, 1);
-            if (messages.length > 0) {
-              currentConversationId = candidate.id;
-              resumedConversationId = candidate.id;
-              resumed = true;
-              logger.debug(`[P2P] Resumed conversation: ${candidate.id} ("${candidate.title}")`);
-            }
-          }
-        }
-      } catch (err: unknown) {
-        const errMsg = getErrorMessage(err);
-        logger.error({ err, errMsg }, '[P2P] Resume check failed, creating new');
-        if (errMsg.toLowerCase().includes('session is closed') || errMsg.includes('not initialized')) {
-          try {
-            await closeMessageStore();
-            await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Message store reinit');
-            messageStoreReady = true;
-          } catch (reinitErr) {
-            messageStoreReady = false;
-            logger.error({ err: reinitErr }, '[P2P] Message store reinit failed');
-          }
-        }
-      }
-
-      if (!resumed) {
-        if (messageStoreReady) {
-          const conv = await createConversation('New conversation');
-          currentConversationId = conv.id;
-          logger.debug({ conversationId: conv.id }, '[P2P] Message store initialized');
-        } else {
-          logger.debug('[P2P] Message store not available, will retry on first message');
-        }
-      }
-    } catch (err: unknown) {
-      messageStoreReady = false;
-      logger.error({ err }, '[P2P] Message store init failed');
-    }
+    await initStoreAndResumeConversation();
 
     swarm = new Hyperswarm();
     topicKey = deriveTopicKey(getOrCreateP2PSeed());
@@ -743,24 +779,16 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       const stabilityTimer = setTimeout(() => resetBackoff(connKey), BACKOFF_RESET_AFTER_MS);
 
       conn.on('close', () => {
-        clearTimeout(stabilityTimer);
-        conn.removeAllListeners();
-        if (connections.get(connKey) !== conn) return;
-        connections.delete(connKey);
-        removePeerQueue(conn);
-        recordDisconnect(connKey);
-        logger.debug(`[P2P] Peer disconnected (${shortKey}). Remaining: ${connections.size}`);
-        peerStatusCallback?.('disconnected', connections.size);
+        if (teardownConnection(conn, connKey, stabilityTimer)) {
+          logger.debug(`[P2P] Peer disconnected (${shortKey}). Remaining: ${connections.size}`);
+          peerStatusCallback?.('disconnected', connections.size);
+        }
       });
       conn.on('error', (err: Error) => {
-        clearTimeout(stabilityTimer);
-        conn.removeAllListeners();
-        if (connections.get(connKey) !== conn) return;
-        connections.delete(connKey);
-        removePeerQueue(conn);
-        recordDisconnect(connKey);
-        logger.warn({ err, key: shortKey, peers: connections.size }, '[P2P] Peer error');
-        peerStatusCallback?.('disconnected', connections.size);
+        if (teardownConnection(conn, connKey, stabilityTimer)) {
+          logger.warn({ err, key: shortKey, peers: connections.size }, '[P2P] Peer error');
+          peerStatusCallback?.('disconnected', connections.size);
+        }
       });
 
       // Give the connection a moment to stabilise before sending data.
@@ -855,25 +883,13 @@ export async function joinP2PSwarm(
       const clientStabilityTimer = setTimeout(() => resetBackoff(remoteKey), BACKOFF_RESET_AFTER_MS);
 
       conn.on('close', () => {
-        clearTimeout(clientStabilityTimer);
-        conn.removeAllListeners();
-        if (connections.get(remoteKey) === conn) {
-          connections.delete(remoteKey);
-          removePeerQueue(conn);
-          recordDisconnect(remoteKey);
-        }
+        teardownConnection(conn, remoteKey, clientStabilityTimer);
         logger.debug(`[P2P] Disconnected from host. Remaining peers: ${connections.size}`);
       });
 
       conn.on('error', (err: Error) => {
-        clearTimeout(clientStabilityTimer);
-        conn.removeAllListeners();
         logger.error({ err }, '[P2P] Connection error');
-        if (connections.get(remoteKey) === conn) {
-          connections.delete(remoteKey);
-          removePeerQueue(conn);
-          recordDisconnect(remoteKey);
-        }
+        teardownConnection(conn, remoteKey, clientStabilityTimer);
       });
     });
 
