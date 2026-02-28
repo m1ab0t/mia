@@ -46,6 +46,7 @@ const COMMAND_HANDLERS: Record<string, (args: string[]) => Promise<string>> = {
   standup: slashStandup,
   help:    slashHelp,
   status:  slashStatus,
+  update:  slashUpdate,
 };
 
 /**
@@ -81,6 +82,7 @@ async function slashHelp(): Promise<string> {
     '| `/recap [--date YYYY-MM-DD]` | Daily digest |',
     '| `/standup [--yesterday\\|--hours N]` | Standup report (git + dispatches) |',
     '| `/status` | Daemon status |',
+    '| `/update` | Pull latest, rebuild, restart |',
     '| `/help` | This help message |',
   ];
   return lines.join('\n');
@@ -471,6 +473,36 @@ async function slashStandup(args: string[]): Promise<string> {
         lines.push(`- ${p}`);
       }
     }
+  }
+
+  return lines.join('\n');
+}
+
+// ── /update ──────────────────────────────────────────────────────────────
+
+async function slashUpdate(): Promise<string> {
+  const { performUpdate } = await import('./commands/update');
+
+  const result = await performUpdate();
+
+  const icon = (s: string) => s === 'ok' ? '✅' : s === 'skip' ? '⚠️' : '❌';
+  const lines: string[] = ['## Update', ''];
+
+  for (const step of result.steps) {
+    lines.push(`${icon(step.status)} **${step.name}**: ${step.detail}`);
+  }
+
+  lines.push('');
+
+  if (result.upToDate) {
+    lines.push(`Already up-to-date — **${result.version}** (${result.commit})`);
+  } else if (result.success) {
+    lines.push(`Updated to **${result.version}** (${result.commit})`);
+    if (result.daemonRestarted) {
+      lines.push('Daemon restarted with new code.');
+    }
+  } else {
+    lines.push(`**Update failed:** ${result.error}`);
   }
 
   return lines.join('\n');

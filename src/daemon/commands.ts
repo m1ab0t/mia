@@ -50,3 +50,5 @@ export { handleCommitCommand } from './commands/commit.js';
 export { handleStandupCommand } from './commands/standup.js';
 
 export { handleChangelogCommand } from './commands/changelog.js';
+
+export { handleUpdateCommand } from './commands/update.js';

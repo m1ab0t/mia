@@ -16,7 +16,7 @@ const DAEMON_COMMANDS = new Set(['start', 'stop', 'restart', 'status', 'logs']);
 
 const ROUTED_COMMANDS = new Set([
   'p2p', 'plugin', 'scheduler', 'usage', 'ask', 'chat', 'memory', 'log',
-  'doctor', 'config', 'commit', 'standup', 'changelog',
+  'doctor', 'config', 'commit', 'standup', 'changelog', 'update',
 ]);
 
 // Commands that require the daemon to be running. A quick ping is performed
@@ -130,6 +130,8 @@ if (!command || command === 'help' || command === '--help' || command === '-h') 
   ${c}--raw${x}           ${d}·${x} plain text output for piping
   ${c}--no-context${x}    ${d}·${x} skip workspace context (faster)
 
+  ${c}update${x}   ${d}·${x} pull latest, rebuild, restart daemon
+
   ${d}-v${x}      ${d}·${x} version
   ${d}-h${x}      ${d}·${x} help
 `);
@@ -182,6 +184,7 @@ if (command === 'setup') {
     commit:    () => h.handleCommitCommand(args),
     standup:   () => h.handleStandupCommand(args),
     changelog: () => h.handleChangelogCommand(args),
+    update:    () => h.handleUpdateCommand(args),
   };
   await dispatch[command]();
   process.exit(0);
