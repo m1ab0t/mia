@@ -100,6 +100,38 @@ const SSE_INITIAL_BACKOFF_MS = 500;
 const HEALTH_CHECK_TIMEOUT_MS = 3_000; // 3 seconds
 
 /**
+ * Buffer (ms) added on top of the task timeout when wrapping session.prompt
+ * in withTimeout.
+ *
+ * The task-level timer (armed in _setupTaskAndTimeout) fires first at
+ * `timeoutMs`, calls abortController.abort(), marks the task as 'error', and
+ * records task.errorCode = TIMEOUT with a human-readable message.  This outer
+ * withTimeout fires `PROMPT_TIMEOUT_BUFFER_MS` later and throws, causing
+ * _executePrompt to fall into its catch block and call _handleCatchError.
+ *
+ * Why this matters: session.prompt is a blocking HTTP call to the local
+ * opencode server.  Without an AbortSignal (the SDK's PromptFn type does not
+ * expose one), there is no way to cancel the in-flight request when the task
+ * times out.  If the server is live-locked (accepts the connection but never
+ * responds), session.prompt hangs indefinitely — the await on line 770 is
+ * never resolved, _executePrompt never returns, and the dispatch Promise
+ * (and all its closures: prompt text, context, callbacks) leaks in memory
+ * until TCP keepalive eventually kills the connection (hours later).
+ *
+ * With this buffer the worst-case hang is bounded: _executePrompt always
+ * returns within timeoutMs + PROMPT_TIMEOUT_BUFFER_MS regardless of how long
+ * the server takes.  The underlying HTTP connection may still be in flight
+ * after that point, but it holds no meaningful references and will be cleaned
+ * up when the OS-level TCP timeout fires.
+ *
+ * 5 s is generous: the task timer fires at timeoutMs (e.g. 30 min), so the
+ * buffer gives the timer callback a full 5 s to complete its bookkeeping
+ * before this withTimeout fires.  In practice both fire within the same
+ * event-loop turn, but a small buffer avoids any race between them.
+ */
+const PROMPT_TIMEOUT_BUFFER_MS = 5_000; // 5 s after task timer fires
+
+/**
  * How often the plugin automatically prunes stale completed tasks from its
  * internal task Map.  Without this, long-running daemon instances accumulate
  * a task record for every prompt ever dispatched, leaking memory over time.
@@ -767,10 +799,31 @@ export class OpenCodePlugin implements CodingPlugin {
       // Fire-and-forget — errors are handled inside _subscribeToToolEvents.
       void this._subscribeToToolEvents(sessionId, taskId, callbacks, emittedCallIds, sseAbort.signal);
 
-      const response = await (this.client!.session.prompt as unknown as PromptFn)({
-        path: { id: sessionId },
-        body,
-      });
+      // Wrapped in withTimeout: session.prompt is a blocking HTTP call with no
+      // AbortSignal support (PromptFn does not expose one).  If the opencode
+      // server is live-locked — accepts the connection but never sends a
+      // response — this await would hang indefinitely after the task timeout
+      // fires.  The task-level timer (armed in _setupTaskAndTimeout) fires at
+      // `timeoutMs` and marks the task as 'error', but without this guard
+      // _executePrompt itself never returns, leaking the coroutine and all its
+      // captured references (prompt text, context, callbacks) until TCP keepalive
+      // eventually kills the connection (potentially hours later).
+      //
+      // The timeout here is timeoutMs + PROMPT_TIMEOUT_BUFFER_MS so the task
+      // timer always fires first, setting the correct task.errorCode (TIMEOUT)
+      // and task.error message before this withTimeout fires.  When withTimeout
+      // throws, _handleCatchError reads those fields and returns the right error
+      // to the caller — identical to what the caller would see today if
+      // session.prompt returned after a timeout.
+      const timeoutMs = options.timeoutMs || this.config?.timeoutMs || DEFAULT_TASK_TIMEOUT_MS;
+      const response = await withTimeout(
+        (this.client!.session.prompt as unknown as PromptFn)({
+          path: { id: sessionId },
+          body,
+        }),
+        timeoutMs + PROMPT_TIMEOUT_BUFFER_MS,
+        'OpenCode session.prompt',
+      );
 
       // session.prompt has returned — stop the SSE subscription.
       sseAbort.abort();
