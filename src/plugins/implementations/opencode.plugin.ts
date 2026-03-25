@@ -152,6 +152,27 @@ const TASK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
  */
 const MAX_CONVERSATION_QUEUE_DEPTH = 10;
 
+/**
+ * Maximum entries allowed in `conversationSessions`.
+ *
+ * `conversationSessions` maps conversationId → opencodeSessionId and grows by
+ * one entry per unique conversation over the daemon's lifetime.  The map is
+ * never swept automatically — `clearSession()` is only called on explicit
+ * conversation reset; `clearAllSessions()` only on shutdown.
+ *
+ * On a busy daemon handling dozens of conversations per day, this map grows
+ * without bound for months, slowly leaking memory (each entry is two strings
+ * ≈ 200 bytes with Map overhead; 10 000 entries ≈ 2 MB — not catastrophic, but
+ * the principle of bounded data structures matters for a 24/7 process).
+ *
+ * When the map exceeds this cap, the oldest half is evicted (JS Map iteration
+ * order is insertion order).  Evicted sessions lose resume capability — the
+ * next dispatch for that conversation creates a fresh opencode session — but
+ * the daemon stays memory-bounded.  500 entries covers weeks of history for a
+ * typical single-user instance.  Mirrors BaseSpawnPlugin.MAX_SESSION_ENTRIES.
+ */
+const MAX_CONVERSATION_SESSION_ENTRIES = 500;
+
 // ── Minimal SDK type shapes (from @opencode-ai/sdk types.gen.d.ts) ──────────
 // We define only the shapes we actually use so we don't depend on import paths.
 
@@ -1567,7 +1588,38 @@ export class OpenCodePlugin implements CodingPlugin {
         pruned++;
       }
     }
+    // Also enforce the session map cap so `conversationSessions` cannot grow
+    // without bound over the daemon's lifetime.
+    this._evictStaleConversationSessions();
     return pruned;
+  }
+
+  /**
+   * Evict the oldest entries from `conversationSessions` when the map exceeds
+   * `MAX_CONVERSATION_SESSION_ENTRIES`.
+   *
+   * JS Map iteration order is insertion order, so the first N entries are always
+   * the oldest.  Evicted sessions lose resume capability — the next dispatch for
+   * that conversation will create a fresh opencode session — but the daemon's
+   * memory stays bounded.
+   *
+   * Called from `cleanup()` (runs every 30 minutes) so the cap is enforced
+   * passively without adding overhead to the hot dispatch path.
+   *
+   * Mirrors `BaseSpawnPlugin._evictStaleSessions()`.
+   */
+  private _evictStaleConversationSessions(): void {
+    if (this.conversationSessions.size <= MAX_CONVERSATION_SESSION_ENTRIES) return;
+    const evictCount = Math.floor(MAX_CONVERSATION_SESSION_ENTRIES / 2);
+    let i = 0;
+    for (const convId of this.conversationSessions.keys()) {
+      if (i++ >= evictCount) break;
+      this.conversationSessions.delete(convId);
+    }
+    logger.info(
+      { plugin: this.name, evicted: evictCount, remaining: this.conversationSessions.size },
+      `[${this.name}] Evicted ${evictCount} oldest conversation sessions (cap: ${MAX_CONVERSATION_SESSION_ENTRIES})`,
+    );
   }
 
   releaseResultBuffers(graceMs: number = 5 * 60 * 1000): number {
