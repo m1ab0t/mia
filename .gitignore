@@ -1,0 +1,16 @@
+.env
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.vscode/
+.idea/
+.claude/
+.mia
+.opencode
+.agents
+.codex
+*.tsbuildinfo
+bin
+.worktrees/

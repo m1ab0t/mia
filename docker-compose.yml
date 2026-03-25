@@ -1,0 +1,9 @@
+services:
+  mia:
+    build: .
+    container_name: mia-daemon
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ~/.mia:/home/mia/.mia
+    stop_grace_period: 10s
