@@ -343,6 +343,18 @@ class PeerWriteQueue {
       connections.delete(this.key);
     }
     writeQueues.delete(this.conn);
+    // Record the disconnect in the backoff system so that when this peer
+    // reconnects (Hyperswarm is persistent), the initial-sync delay applies.
+    // Without this call, queue-overflow evictions bypass the reconnect backoff
+    // entirely — a consistently slow mobile client can spin in a rapid
+    // evict → reconnect → evict cycle with zero delay, hammering the
+    // connection-accepted path and initial-sync broadcast for every cycle.
+    // `recordDisconnect` is a no-op for anon-* keys, so this is always safe.
+    try {
+      recordDisconnect(this.key);
+    } catch {
+      // Safety net: backoff recording must never crash the write path.
+    }
   }
 
   private async _drain(): Promise<void> {
