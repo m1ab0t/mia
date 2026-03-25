@@ -729,14 +729,31 @@ export class PluginDispatcher {
       }
 
       // Run the full middleware chain for this candidate.
-      const result = await this._attemptDispatch(
-        plugin,
-        prompt,
-        conversationId,
-        context,
-        dispatchOptions,
-        externalCallbacks,
-      );
+      //
+      // Guard: if _attemptDispatch throws unexpectedly (e.g. traceLogger.endTrace
+      // throws in its own finally block, or a future code path is added that isn't
+      // fully guarded), the circuit-breaker update at the lines below would be
+      // skipped.  When the circuit is HALF_OPEN this leaves probeInFlight=true
+      // permanently — no further probe attempts are ever allowed and the plugin
+      // is silently frozen for the rest of the daemon's lifetime.
+      //
+      // The try/catch here ensures _circuitOnFailure is called before re-throwing
+      // so the circuit always exits HALF_OPEN (back to OPEN for another cooldown),
+      // regardless of how _attemptDispatch fails.
+      let result: PluginDispatchResult;
+      try {
+        result = await this._attemptDispatch(
+          plugin,
+          prompt,
+          conversationId,
+          context,
+          dispatchOptions,
+          externalCallbacks,
+        );
+      } catch (attemptErr: unknown) {
+        this._circuitOnFailure(plugin.name);
+        throw attemptErr;
+      }
 
       // Update circuit breaker state based on outcome.
       if (result.success) {

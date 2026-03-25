@@ -1069,6 +1069,64 @@ describe('PluginDispatcher', () => {
       expect(state['claude-code']?.consecutiveFailures).toBe(1);
       expect(state['claude-code']?.state).toBe('CLOSED');
     });
+
+    it('clears probeInFlight and re-opens circuit when _attemptDispatch throws unexpectedly during HALF_OPEN probe', async () => {
+      // Regression test: if _attemptDispatch throws (e.g. traceLogger.endTrace
+      // throws in its finally block), the circuit breaker must not be left with
+      // probeInFlight=true in HALF_OPEN — which would permanently block all
+      // future dispatches to this plugin.
+      vi.useFakeTimers();
+      try {
+        const failPlugin = makeFailingPlugin();
+        const reg = new PluginRegistry();
+        reg.register(failPlugin);
+        const cfg: MiaConfig = {
+          ...baseConfig,
+          pluginDispatch: { circuitBreaker: { failureThreshold: 3, cooldownMs: 1000 } },
+        };
+
+        // Build a traceLogger whose endTrace throws on the 4th call (the probe).
+        // This simulates an unexpected throw inside _attemptDispatch's finally block.
+        const throwingTraceLogger = makeTraceLogger();
+        let endTraceCallCount = 0;
+        vi.mocked(throwingTraceLogger.endTrace).mockImplementation(() => {
+          endTraceCallCount++;
+          if (endTraceCallCount >= 4) {
+            throw new Error('traceLogger.endTrace threw unexpectedly');
+          }
+        });
+
+        const d = new PluginDispatcher(reg, makeContextPreparer(), throwingTraceLogger, makeVerifier(), cfg);
+
+        // Open the circuit with 3 failures (endTrace calls 1–3 succeed)
+        await d.dispatch('task', 'c1');
+        await d.dispatch('task', 'c2');
+        await d.dispatch('task', 'c3');
+        expect(d.getCircuitBreakerState()['claude-code']?.state).toBe('OPEN');
+
+        // Advance past cooldown — next dispatch transitions OPEN → HALF_OPEN and probes.
+        // endTrace throws on this 4th call → _attemptDispatch throws → dispatch rejects.
+        vi.advanceTimersByTime(1001);
+        await expect(d.dispatch('probe', 'c4')).rejects.toThrow('traceLogger.endTrace threw unexpectedly');
+
+        // Circuit must be back to OPEN (not stuck in HALF_OPEN with probeInFlight=true)
+        const state = d.getCircuitBreakerState()['claude-code'];
+        expect(state?.state).toBe('OPEN');
+
+        // Advance cooldown again — a second probe must be allowed (probeInFlight is clear).
+        // If the circuit were stuck with probeInFlight=true, the second dispatch would
+        // return a circuit-open error WITHOUT calling the plugin or traceLogger.endTrace.
+        // If _circuitOnFailure correctly cleared probeInFlight, traceLogger.endTrace is
+        // called again (5th total call) and throws → dispatch rejects.
+        vi.advanceTimersByTime(1001);
+        const endTraceCallsBefore = endTraceCallCount;
+        await expect(d.dispatch('probe2', 'c5')).rejects.toThrow('traceLogger.endTrace threw unexpectedly');
+        // endTrace was called again → plugin was actually reached on the second probe
+        expect(endTraceCallCount).toBeGreaterThan(endTraceCallsBefore);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // ── Availability Cache ────────────────────────────────────────────────────
