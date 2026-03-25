@@ -138,6 +138,20 @@ const PROMPT_TIMEOUT_BUFFER_MS = 5_000; // 5 s after task timer fires
  */
 const TASK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 
+/**
+ * Maximum pending dispatch entries allowed in the per-conversation queue.
+ *
+ * Without this cap, a buggy mobile client (rapid retries, reconnect storm) or
+ * an overlapping scheduler dispatch can enqueue messages without limit.  Each
+ * entry holds a full prompt string, context object, callbacks, and a Promise
+ * settle-pair — so 100+ entries can consume tens of MB of heap and then
+ * execute stale commands serially for minutes after the flood stops.
+ *
+ * When the cap is reached, new dispatches are rejected immediately with a
+ * CONCURRENCY_LIMIT error.  Mirrors BaseSpawnPlugin.MAX_CONVERSATION_QUEUE_DEPTH.
+ */
+const MAX_CONVERSATION_QUEUE_DEPTH = 10;
+
 // ── Minimal SDK type shapes (from @opencode-ai/sdk types.gen.d.ts) ──────────
 // We define only the shapes we actually use so we don't depend on import paths.
 
@@ -583,6 +597,28 @@ export class OpenCodePlugin implements CodingPlugin {
     // If there's already a running task for this conversation, queue this one
     const activeTaskId = this.activeConversations.get(conversationId);
     if (activeTaskId && this.tasks.get(activeTaskId)?.status === 'running') {
+      // Guard: reject immediately if the per-conversation queue is already at
+      // the depth cap.  Without this, a flood of messages (buggy client,
+      // reconnect storm, scheduler overlap) can grow the queue without bound,
+      // leaking heap and executing stale commands for minutes after the flood.
+      const existingQueue = this.conversationQueues.get(conversationId);
+      const currentDepth = existingQueue?.length ?? 0;
+      if (currentDepth >= MAX_CONVERSATION_QUEUE_DEPTH) {
+        const taskId = randomUUID();
+        const errorMsg =
+          `Conversation queue full (depth=${MAX_CONVERSATION_QUEUE_DEPTH}) — ` +
+          `dropping dispatch for conversation "${conversationId}"`;
+        logger.warn(
+          { plugin: this.name, conversationId, depth: currentDepth },
+          `[OpenCodePlugin] ${errorMsg}`,
+        );
+        callbacks.onError(
+          new PluginError(errorMsg, PluginErrorCode.CONCURRENCY_LIMIT, this.name),
+          taskId,
+        );
+        return { taskId, success: false, output: errorMsg, durationMs: 0 };
+      }
+
       return new Promise<PluginDispatchResult>((resolve, reject) => {
         if (!this.conversationQueues.has(conversationId)) {
           this.conversationQueues.set(conversationId, []);
