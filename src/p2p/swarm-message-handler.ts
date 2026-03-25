@@ -437,24 +437,38 @@ export async function sendInitialSyncTo(
 
 // ── Broadcast helpers ─────────────────────────────────────────────────
 
+/**
+ * Send the current conversation list to every connected peer in parallel.
+ *
+ * The previous implementation awaited each peer sequentially.  With N peers
+ * and a 5 s per-peer DB timeout in sendConversationListTo(), the broadcast
+ * could block for N × 5 s — stalling the message-handler loop and preventing
+ * any subsequent P2P messages from being processed until all peers were
+ * served.  Promise.allSettled() fans out all sends concurrently so the wall
+ * time is bounded by a single peer's timeout regardless of peer count.
+ */
 export async function broadcastConversationList(ctx: MessageHandlerContext): Promise<void> {
-  for (const peer of connections.values()) {
-    await sendConversationListTo(peer, ctx);
-  }
+  await Promise.allSettled(
+    [...connections.values()].map(peer => sendConversationListTo(peer, ctx)),
+  );
 }
 
 /**
  * Send an empty history payload to every connected peer and refresh the
  * conversation list.  Called when the active conversation is cleared
  * (new conversation, delete, delete-all) so every device stays in sync.
+ *
+ * Parallelised for the same reason as broadcastConversationList above.
  */
 async function broadcastHistoryReset(ctx: MessageHandlerContext): Promise<void> {
   const historyReset =
     JSON.stringify({ type: 'history', conversationId: null, messages: [], hasMore: false }) + '\n';
-  for (const peer of connections.values()) {
-    await sendConversationListTo(peer, ctx);
-    writeToConn(peer, b4a.from(historyReset));
-  }
+  await Promise.allSettled(
+    [...connections.values()].map(async peer => {
+      await sendConversationListTo(peer, ctx);
+      writeToConn(peer, b4a.from(historyReset));
+    }),
+  );
 }
 
 // ── History replay with legacy expansion ─────────────────────────────
