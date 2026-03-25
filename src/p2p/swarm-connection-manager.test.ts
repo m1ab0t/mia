@@ -38,6 +38,7 @@ import {
   enforceAnonCap,
   sendToAll,
   sendP2PMessage,
+  getReconnectDelay,
 } from './swarm-connection-manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -319,6 +320,29 @@ describe('PeerWriteQueue — queue-full eviction (MAX_QUEUE_DEPTH = 256)', () =>
 
     expect(conn.destroyed).toBe(true);
     expect(connections.has(key)).toBe(false);
+  });
+
+  it('records the disconnect in the backoff system on queue-overflow eviction', async () => {
+    // A peer evicted for queue overflow must have its disconnect recorded so
+    // the reconnect backoff fires on the next connection — preventing a rapid
+    // evict → reconnect → evict spin cycle with no delay.
+    const conn = makeConn();
+    const key = 'backoff-evict-peer';
+    connections.set(key, asDuplex(conn));
+    registerPeerQueue(key, asDuplex(conn));
+
+    // Before eviction: no backoff delay (first connection).
+    expect(getReconnectDelay(key)).toBe(0);
+
+    conn.backpressure = true;
+    const chunk = Buffer.from('x');
+    for (let i = 0; i < CALLS_TO_FILL; i++) {
+      writeToConn(asDuplex(conn), chunk);
+    }
+    await flush();
+
+    // After eviction: backoff delay must be > 0 (exponential backoff kicks in).
+    expect(getReconnectDelay(key)).toBeGreaterThan(0);
   });
 });
 
