@@ -1380,8 +1380,12 @@ export async function joinP2PSwarm(
     swarm = new Hyperswarm();
     topicKey = b4a.from(topicHex, 'hex');
 
-    // Start the periodic backoff sweeper (same as createP2PSwarm).
+    // Start the periodic backoff sweeper and ghost sweeper (same as createP2PSwarm).
+    // Without startGhostSweeper() the join path never cleans up unidentified
+    // connections from crashed devices or probes — they accumulate indefinitely,
+    // holding sockets and memory for the P2P agent's entire lifetime.
     startBackoffSweeper();
+    startGhostSweeper();
 
     // Same Hyperswarm error handler as createP2PSwarm — absorb transient
     // DHT / socket errors so they don't crash the P2P agent process.
