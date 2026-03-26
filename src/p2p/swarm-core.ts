@@ -487,9 +487,23 @@ function autoNameConversation(targetConvId?: string): void {
     // incorrectly restore the stale ID on the mobile, causing messages from
     // the old conversation to bleed through the client-side filter.
     if (ctx.getCurrentConversationId() !== convId) return;
-    for (const conn of connections.values()) {
-      await sendConversationListTo(conn, ctx);
-    }
+    // Snapshot connections at this point — same pattern as broadcastConversationList
+    // (PR #4).  Two reasons:
+    //
+    // 1. Sequential awaits (the old for..await) take N × 5 s (N peers × per-peer
+    //    DB timeout) instead of ~5 s total.  Promise.allSettled() fans out all
+    //    sends concurrently so the wall time is bounded by a single peer's timeout
+    //    regardless of peer count, and the fire-and-forget IIFE finishes faster —
+    //    releasing closure references (ctx, connections, convId) sooner.
+    //
+    // 2. `connections.values()` is a live iterator.  A peer that connects after
+    //    the rename but mid-loop receives the conversations frame even though it
+    //    will also get a full sendInitialSyncTo() bundle on connection.  The
+    //    snapshot ([...connections.values()]) closes over only the peers present
+    //    when the broadcast decision was made, avoiding this race.
+    await Promise.allSettled(
+      [...connections.values()].map(conn => sendConversationListTo(conn, ctx)),
+    );
   })().catch((err) => {
     logger.error({ err }, '[P2P] Auto-name failed');
   });
