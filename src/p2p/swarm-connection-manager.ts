@@ -309,11 +309,38 @@ export const connections: Map<string, Duplex> = new Map();
 class PeerWriteQueue {
   private readonly entries: Uint8Array[] = [];
   private draining = false;
+  /**
+   * When `_drain()` is blocked waiting for backpressure to clear, it stores a
+   * cancel callback here.  `cancel()` invokes it so the coroutine is released
+   * immediately rather than waiting up to DRAIN_TIMEOUT_MS (30 s).
+   *
+   * Without this, `teardownConnection` → `conn.removeAllListeners()` removes
+   * the drain/error/close listeners that `_drain()` registered, leaving the
+   * backpressure Promise stuck until the 30-second timeout fires.  On daemons
+   * where the mobile client reconnects frequently (wifi/cellular switching,
+   * app background/foreground), stale 30-second timers accumulate — each
+   * holding a reference to the dead conn in Node's handle list and delaying
+   * GC.  `cancel()` closes the loop immediately, matching the pattern used by
+   * `IpcWriteQueue` in sender.ts.
+   */
+  private _cancelDrain: (() => void) | null = null;
 
   constructor(
     private readonly conn: Duplex,
     private readonly key: string,
   ) {}
+
+  /**
+   * Immediately cancel any in-flight backpressure wait.
+   *
+   * Called by `removePeerQueue` when the connection is being torn down.
+   * Clears the 30-second drain timeout and releases the associated event
+   * listeners from the (now-dead) connection stream.
+   */
+  cancel(): void {
+    this._cancelDrain?.();
+    this._cancelDrain = null;
+  }
 
   enqueue(data: Uint8Array): void {
     if (this.entries.length >= MAX_QUEUE_DEPTH) {
@@ -388,6 +415,10 @@ class PeerWriteQueue {
           // because half-open TCP sockets and `teardownConnection` calling
           // `removeAllListeners()` can both prevent drain/error/close from
           // ever firing.
+          //
+          // `_cancelDrain` is registered so `cancel()` (called from
+          // `removePeerQueue` during teardown) can immediately release this
+          // coroutine instead of waiting up to DRAIN_TIMEOUT_MS (30 s).
           const drained = await new Promise<boolean>((resolve) => {
             const timer = setTimeout(() => {
               cleanup();
@@ -396,6 +427,7 @@ class PeerWriteQueue {
 
             const cleanup = () => {
               clearTimeout(timer);
+              this._cancelDrain = null;
               this.conn.off('drain', onDrain);
               this.conn.off('error', onErr);
               this.conn.off('close', onClose);
@@ -406,6 +438,10 @@ class PeerWriteQueue {
             this.conn.once('drain', onDrain);
             this.conn.once('error', onErr);
             this.conn.once('close', onClose);
+
+            // Register cancel hook so cancel() can release this coroutine
+            // immediately when the connection is torn down.
+            this._cancelDrain = () => { cleanup(); resolve(false); };
           });
 
           if (!drained) {
@@ -437,9 +473,22 @@ export function registerPeerQueue(key: string, conn: Duplex): void {
   writeQueues.set(conn, new PeerWriteQueue(conn, key));
 }
 
-/** Remove the write queue when a connection closes or errors. */
+/**
+ * Remove the write queue when a connection closes or errors.
+ *
+ * Calls `cancel()` on the queue before deleting it so any in-flight
+ * backpressure wait is immediately released — preventing a 30-second stale
+ * timer from accumulating every time `teardownConnection` tears down a
+ * connection whose `_drain()` coroutine is blocked waiting for backpressure
+ * to clear.  This mirrors the `destroy()` cancel-hook pattern used by
+ * `IpcWriteQueue` in sender.ts.
+ */
 export function removePeerQueue(conn: Duplex): void {
-  writeQueues.delete(conn);
+  const queue = writeQueues.get(conn);
+  if (queue) {
+    try { queue.cancel(); } catch { /* cancel must never crash teardown */ }
+    writeQueues.delete(conn);
+  }
 }
 
 /**
