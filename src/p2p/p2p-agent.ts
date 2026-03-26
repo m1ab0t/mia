@@ -75,12 +75,16 @@ loadMiaEnv();
           `[P2P Agent] CRITICAL: ${REJECTION_THRESHOLD}+ unhandled rejections in ` +
             `${REJECTION_WINDOW_MS / 60_000}min — exiting for restart\n`,
         );
-        // Best-effort graceful teardown; import may not have resolved yet.
+        // Best-effort graceful teardown.  ESM top-level imports are fully
+        // resolved before any module code runs, so disconnectP2P is always
+        // available here.  The previous require('./swarm') was dead code —
+        // require() is not defined in ESM context (package.json "type":"module"),
+        // so the swarm was never disconnected, leaving HyperDB writes uncommitted
+        // and Hyperswarm DHT connections dangling on every crash-exit.
         try {
-          const { disconnectP2P: dc } = require('./swarm');
-          (dc as () => Promise<void>)().catch(ignoreError('rejection-teardown'));
+          disconnectP2P().catch(ignoreError('rejection-teardown'));
         } catch {
-          /* swarm not loaded yet — nothing to tear down */
+          /* disconnectP2P may throw synchronously if swarm is in a bad state */
         }
         setTimeout(() => process.exit(1), 500);
       }
@@ -94,12 +98,12 @@ loadMiaEnv();
       process.stderr.write(
         `[P2P Agent] FATAL: Uncaught exception — exiting: ${err.message}\n${err.stack}\n`,
       );
-      // Best-effort graceful teardown.
+      // Best-effort graceful teardown — same reasoning as unhandledRejection above.
+      // disconnectP2P is a module-level ESM import and is always defined here.
       try {
-        const { disconnectP2P: dc } = require('./swarm');
-        (dc as () => Promise<void>)().catch(ignoreError('exception-teardown'));
+        disconnectP2P().catch(ignoreError('exception-teardown'));
       } catch {
-        /* swarm not loaded yet */
+        /* disconnectP2P may throw synchronously if swarm is in a bad state */
       }
     } catch {
       // Best-effort logging; if even this fails, still exit.
