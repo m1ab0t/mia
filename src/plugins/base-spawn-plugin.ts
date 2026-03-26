@@ -159,6 +159,18 @@ export const MAX_CONVERSATION_QUEUE_DEPTH = 10;
  */
 export const MAX_SESSION_ENTRIES = 500;
 
+/**
+ * How often (ms) to run a periodic task-record sweep in BaseSpawnPlugin.
+ *
+ * The completion-driven cleanup (every 10 completions via _completionCount)
+ * never fires when all dispatches are rejected before a task is spawned —
+ * e.g. circuit breaker open, concurrency limit reached, or queue-depth cap
+ * hit.  All three rejection paths add an error task record to `this.tasks`
+ * without incrementing _completionCount, so without a periodic timer the
+ * tasks Map grows unbounded during sustained rejection storms.
+ */
+const TASK_CLEANUP_INTERVAL_MS = 30 * 60 * 1_000; // 30 minutes
+
 /** Default inactivity timeout — kill child if no NDJSON output for this long. */
 const DEFAULT_STALL_TIMEOUT_MS = 1_800_000; // 30 minutes
 
@@ -249,6 +261,13 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
   private _killedTaskIds = new Set<string>();
 
   private _completionCount = 0;
+
+  /**
+   * Periodic cleanup interval handle.  Started in initialize(), cleared in
+   * shutdown() and on re-initialization to prevent interval leaks on SIGHUP
+   * config reloads (which call initialize() on every plugin).
+   */
+  private _cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   /**
    * Maps taskId → stall timer handle so the force-kill timeout in `_kill`
@@ -355,9 +374,41 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
 
   async initialize(config: PluginConfig): Promise<void> {
     this.config = config;
+
+    // Guard against interval leak on SIGHUP re-initialization: if initialize()
+    // is called again while the daemon is already running (e.g. hot-reload),
+    // clear the previous interval before starting a new one.
+    if (this._cleanupInterval !== null) {
+      clearInterval(this._cleanupInterval);
+      this._cleanupInterval = null;
+    }
+
+    // Periodic sweep to prune stale error/completed task records that were
+    // created by the circuit-breaker, concurrency-limit, and queue-depth-cap
+    // rejection paths.  Those paths add records to this.tasks without
+    // incrementing _completionCount, so the completion-driven cleanup (every
+    // 10 completions) never fires during a sustained rejection storm, causing
+    // unbounded Map growth over long daemon uptime.
+    const interval = setInterval(() => {
+      try {
+        this.cleanup();
+      } catch {
+        // The cleanup timer must never crash the daemon — swallow and continue.
+      }
+    }, TASK_CLEANUP_INTERVAL_MS);
+    if (typeof interval === 'object' && 'unref' in interval) {
+      (interval as NodeJS.Timeout).unref();
+    }
+    this._cleanupInterval = interval;
   }
 
   async shutdown(): Promise<void> {
+    // Stop the periodic cleanup timer before killing processes.
+    if (this._cleanupInterval !== null) {
+      clearInterval(this._cleanupInterval);
+      this._cleanupInterval = null;
+    }
+
     // Wait for all child processes to actually terminate, not just SIGTERM them.
     // Without this, daemon restarts can leave orphaned child processes.
     await this._killAllAndWait();
