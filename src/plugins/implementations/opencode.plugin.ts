@@ -75,6 +75,16 @@ const OPENCODE_SERVER_TIMEOUT_MS = 15000;
  */
 const ENSURE_SERVER_TIMEOUT_MS = 20_000; // 20 s total — above the 15 s createOpencode timeout
 const SESSION_CREATE_TIMEOUT_MS = 10_000; // 10 s — guards against hung HTTP on a live-but-unresponsive server
+/**
+ * Hard timeout for session.abort() HTTP call (ms).
+ *
+ * session.abort() is called on every user-abort and stuck-task recovery.
+ * If the opencode server is frozen or unreachable, the HTTP call would hang
+ * indefinitely without this guard — leaking a Promise on every abort until
+ * the daemon runs out of memory.  5 s is generous; a healthy server responds
+ * to abort in < 100 ms.
+ */
+const SESSION_ABORT_TIMEOUT_MS = 5_000;
 const DEFAULT_TASK_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── SSE resilience constants ──────────────────────────────────────────────────
@@ -1448,14 +1458,26 @@ export class OpenCodePlugin implements CodingPlugin {
 
     // Also tell the opencode server to abort the session.
     // SDK v1: session.abort({ path: { id } })
+    // Wrapped in withTimeout: if the opencode server is frozen or unreachable,
+    // this HTTP call hangs indefinitely without a guard — creating a leaked
+    // Promise on every user-abort and stuck-task recovery.  Since abort() is
+    // called from fire-and-forget paths (stuckTaskHandler, abortConversation),
+    // a hung call is never awaited by any caller that could time out and cancel
+    // it; the Promise just sits on the heap consuming memory until GC (which
+    // can't collect it because the in-flight fetch holds a reference).
     const task = this.tasks.get(taskId);
     if (task?.opencodeSessionId && this.client) {
       try {
-        await (this.client.session.abort as unknown as AbortFn)({
-          path: { id: task.opencodeSessionId },
-        });
+        await withTimeout(
+          (this.client.session.abort as unknown as AbortFn)({
+            path: { id: task.opencodeSessionId },
+          }),
+          SESSION_ABORT_TIMEOUT_MS,
+          `opencode session.abort (task=${taskId.substring(0, 8)})`,
+        );
       } catch {
-        // Best effort — server-side abort failure doesn't affect task cleanup
+        // Best effort — server-side abort failure doesn't affect task cleanup.
+        // Covers both HTTP errors and the new timeout rejection.
       }
     }
 
