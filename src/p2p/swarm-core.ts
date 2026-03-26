@@ -1456,6 +1456,14 @@ export async function joinP2PSwarm(
         logger.error({ err }, '[P2P] Connection error');
         teardownConnection(conn, remoteKey, clientStabilityTimer);
       });
+
+      // Start keepalive immediately so zombie connections are detected even if
+      // the initial sync stalls.  Matches the guard in createP2PSwarm (line ~1266).
+      // stopKeepalive() is already called inside teardownConnection(), so there
+      // is no risk of a double-start or a leaked timer on disconnect.
+      if (!conn.destroyed) {
+        startKeepalive(conn, remoteKey);
+      }
     });
 
     const discovery = swarm.join(topicKey, { server: false, client: true });
