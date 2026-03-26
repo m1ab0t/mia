@@ -339,21 +339,24 @@ class PeerWriteQueue {
     // connection.  A new connection from the same peer may already have
     // replaced us — deleting the new entry would silently nuke the healthy
     // connection and cause "reconnected but can't send" on mobile.
-    if (connections.get(this.key) === this.conn) {
+    const isActiveConnection = connections.get(this.key) === this.conn;
+    if (isActiveConnection) {
       connections.delete(this.key);
     }
     writeQueues.delete(this.conn);
-    // Record the disconnect in the backoff system so that when this peer
-    // reconnects (Hyperswarm is persistent), the initial-sync delay applies.
-    // Without this call, queue-overflow evictions bypass the reconnect backoff
-    // entirely — a consistently slow mobile client can spin in a rapid
-    // evict → reconnect → evict cycle with zero delay, hammering the
-    // connection-accepted path and initial-sync broadcast for every cycle.
+    // Only record disconnect when WE are evicting an active connection entry.
+    // If teardownConnection() already ran (normal close/error path), it already
+    // removed this key from `connections` AND already called recordDisconnect().
+    // Calling it again here would double-increment the peer's backoff counter —
+    // e.g. a mobile client that drops wifi mid-response would see attempts=2
+    // instead of 1, causing a doubled initial-sync delay on reconnect.
     // `recordDisconnect` is a no-op for anon-* keys, so this is always safe.
-    try {
-      recordDisconnect(this.key);
-    } catch {
-      // Safety net: backoff recording must never crash the write path.
+    if (isActiveConnection) {
+      try {
+        recordDisconnect(this.key);
+      } catch {
+        // Safety net: backoff recording must never crash the write path.
+      }
     }
   }
 
