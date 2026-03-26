@@ -851,7 +851,15 @@ export function stopTokenUsageCacheFlush(): void {
     flushTimer = null;
   }
   // Final synchronous flush so dirty data isn't lost on clean shutdown.
-  if (flushDirty) {
+  //
+  // Guard: skip if an async write is already in-flight.  flushToDiskAsync()
+  // holds flushInProgress=true for the lifetime of its writeFile() call; if
+  // we also called writeFileSync() here, two writes would race on the same
+  // file and produce interleaved / truncated JSON that corrupts the cache on
+  // next startup.  The in-flight async write will complete on its own (it
+  // snapshotted the cache at the start of the write), so we only need the
+  // sync write when no async write is running.
+  if (flushDirty && !flushInProgress) {
     flushToDiskSync();
   }
 }
