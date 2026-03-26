@@ -334,6 +334,12 @@ class PeerWriteQueue {
   }
 
   private _evict(): void {
+    // Stop the keepalive timer immediately so we don't hold a reference to
+    // this destroyed Duplex object until the next keepalive tick (up to 15 s).
+    // The keepalive's own tick would self-heal via the `conn.destroyed` check,
+    // but explicitly stopping it here prevents the GC delay and avoids a
+    // write attempt on a destroyed socket between now and the next tick.
+    stopKeepalive(this.conn);
     try { this.conn.destroy(); } catch { /* ignore */ }
     // Guard: only remove from connections if the Map still points to THIS
     // connection.  A new connection from the same peer may already have
@@ -467,6 +473,9 @@ export function enforceAnonCap(): void {
     for (const [key, conn] of connections) {
       if (key.startsWith('anon-')) {
         logger.debug({ key }, '[P2P] Evicting oldest anonymous connection (LRU cap)');
+        // Stop keepalive before destroying so the timer is freed immediately
+        // rather than waiting up to KEEPALIVE_INTERVAL_MS for the self-heal.
+        stopKeepalive(conn);
         try { conn.destroy(); } catch { /* ignore */ }
         connections.delete(key);
         writeQueues.delete(conn);
