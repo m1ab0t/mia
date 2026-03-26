@@ -480,10 +480,7 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
         proc.stdout?.resume();
         proc.stderr?.resume();
       });
-      const deadline = new Promise<boolean>((resolve) =>
-        setTimeout(() => resolve(false), 12_000)
-      );
-      return Promise.race([check, deadline]);
+      return await withTimeout(check, 12_000, `${this.pluginBinary} --version`);
     } catch {
       return false;
     }
