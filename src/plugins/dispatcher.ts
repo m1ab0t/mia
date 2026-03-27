@@ -237,22 +237,53 @@ export class PluginDispatcher {
   private static readonly AVAILABILITY_NEGATIVE_TTL_MS = 5_000; // 5s for failures (transient stalls)
   private availabilityCache = new Map<string, { available: boolean; ts: number }>();
 
-  private async getCachedAvailability(plugin: { name: string; isAvailable(): Promise<boolean> }): Promise<boolean> {
+  /**
+   * In-flight deduplication map for availability checks.
+   *
+   * `isAvailable()` shells out via execFile — each call forks a child process
+   * and holds three FDs (stdin/stdout/stderr) until it exits.  Under burst P2P
+   * traffic (e.g. multiple clients connecting simultaneously) concurrent callers
+   * can all find the TTL cache stale at the same instant and each spawn their
+   * own execFile child.  With 4 plugins × N concurrent callers that's 4N extra
+   * processes and 12N FDs — a fast path to FD exhaustion and event-loop lag.
+   *
+   * The fix: the first caller to see a stale (or absent) cache entry starts the
+   * check and stores the in-flight Promise here.  Every subsequent concurrent
+   * caller for the same plugin returns the **same** Promise instead of spawning
+   * a duplicate process.  The entry is removed (via .finally) once the Promise
+   * settles, so the next call after settlement issues a fresh check as normal.
+   */
+  private _availabilityInFlight = new Map<string, Promise<boolean>>();
+
+  private getCachedAvailability(plugin: { name: string; isAvailable(): Promise<boolean> }): Promise<boolean> {
     const cached = this.availabilityCache.get(plugin.name);
     if (cached) {
       const ttl = cached.available
         ? PluginDispatcher.AVAILABILITY_CACHE_TTL_MS
         : PluginDispatcher.AVAILABILITY_NEGATIVE_TTL_MS;
-      if (Date.now() - cached.ts < ttl) return cached.available;
+      if (Date.now() - cached.ts < ttl) return Promise.resolve(cached.available);
     }
-    let available = false;
-    try {
-      available = await plugin.isAvailable();
-    } catch (err: unknown) {
-      logger.info({ plugin: plugin.name, err: getErrorMessage(err) }, `[plugin:${plugin.name}] Availability check failed — treating as unavailable`);
-    }
-    this.availabilityCache.set(plugin.name, { available, ts: Date.now() });
-    return available;
+
+    // Coalesce concurrent callers: if a check is already running for this
+    // plugin, return the existing Promise rather than spawning a duplicate.
+    const inflight = this._availabilityInFlight.get(plugin.name);
+    if (inflight) return inflight;
+
+    const check = (async () => {
+      let available = false;
+      try {
+        available = await plugin.isAvailable();
+      } catch (err: unknown) {
+        logger.info({ plugin: plugin.name, err: getErrorMessage(err) }, `[plugin:${plugin.name}] Availability check failed — treating as unavailable`);
+      }
+      this.availabilityCache.set(plugin.name, { available, ts: Date.now() });
+      return available;
+    })().finally(() => {
+      this._availabilityInFlight.delete(plugin.name);
+    });
+
+    this._availabilityInFlight.set(plugin.name, check);
+    return check;
   }
 
   /**
@@ -262,6 +293,9 @@ export class PluginDispatcher {
    */
   invalidateAvailabilityCache(): void {
     this.availabilityCache.clear();
+    // Also clear any in-flight checks so the next caller gets a fresh spawn
+    // rather than inheriting a result that was started against the old state.
+    this._availabilityInFlight.clear();
   }
 
   /** Pre-warm the availability cache in the background. Call once at startup. */
