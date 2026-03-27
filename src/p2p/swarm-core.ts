@@ -1264,15 +1264,38 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       stabilityTimerByConn.set(conn, stabilityTimer);
 
       conn.on('close', () => {
-        if (teardownConnection(conn, connKey, stabilityTimer)) {
-          logger.debug(`[P2P] Peer disconnected (${shortKey}). Remaining: ${connections.size}`);
-          peerStatusCallback?.('disconnected', connections.size);
+        // Wrapped in try/catch: mirrors the guard used by every other event/timer
+        // callback in this file (swarm.on('error'), stabilityTimer, ghostSweeper,
+        // backoffSweeper).  peerStatusCallback?.() calls ipc.send() →
+        // process.stdout.write() which can throw synchronously when the IPC pipe
+        // is broken; logger.debug() can throw if the pino transport fails.  An
+        // unguarded throw here would crash the P2P agent via uncaughtException on
+        // every peer disconnect — high-frequency on mobile (wifi/cellular switching,
+        // app background/foreground transitions), causing repeated connectivity loss
+        // during the auto-restart cycle.
+        try {
+          if (teardownConnection(conn, connKey, stabilityTimer)) {
+            logger.debug(`[P2P] Peer disconnected (${shortKey}). Remaining: ${connections.size}`);
+            peerStatusCallback?.('disconnected', connections.size);
+          }
+        } catch {
+          // Must never crash the P2P agent — teardown runs synchronously before
+          // any throw can occur, so connection state is already cleaned up.
         }
       });
       conn.on('error', (err: Error) => {
-        if (teardownConnection(conn, connKey, stabilityTimer)) {
-          logger.warn({ err, key: shortKey, peers: connections.size }, '[P2P] Peer error');
-          peerStatusCallback?.('disconnected', connections.size);
+        // Wrapped in try/catch: same rationale as conn.on('close') above.
+        // The 'error' event fires even more frequently on flaky mobile networks
+        // (ECONNRESET, ETIMEDOUT, EPIPE) — an unguarded throw here would crash
+        // the P2P agent on every such event, not just on clean disconnects.
+        try {
+          if (teardownConnection(conn, connKey, stabilityTimer)) {
+            logger.warn({ err, key: shortKey, peers: connections.size }, '[P2P] Peer error');
+            peerStatusCallback?.('disconnected', connections.size);
+          }
+        } catch {
+          // Must never crash the P2P agent — teardown runs synchronously before
+          // any throw can occur, so connection state is already cleaned up.
         }
       });
 
