@@ -256,7 +256,14 @@ async function ensureMessageStore(): Promise<boolean> {
       await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Lazy message store init');
       messageStoreReady = true;
       logger.debug('[P2P] Lazy message store initialization succeeded');
-      await flushWriteBuffer();
+      // Fire-and-forget: buffered entries are historical data — the store is
+      // ready for new writes immediately.  Awaiting a serial flush of up to
+      // WRITE_BUFFER_MAX (500) entries would block ensureMessageStore() for up
+      // to 500 × WRITE_TIMEOUT_MS (10 s) = 5000 s in the worst case, stalling
+      // the AI dispatch path for every new conversation during that window.
+      flushWriteBuffer().catch(err =>
+        logger.error({ err }, '[P2P] Write buffer flush failed — entries may be lost'),
+      );
       return true;
     } catch (err) {
       logger.error({ err }, '[P2P] Lazy message store init failed');
