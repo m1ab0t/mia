@@ -405,7 +405,12 @@ export class Scheduler {
     try {
       task.lastRun = Date.now();
       task.runCount++;
-      await this.taskHandler(task);
+      const timeoutMs = task.timeoutMs ?? SCHEDULER_DEFAULT_TIMEOUT_MS;
+      await withTimeout(
+        this.taskHandler(task),
+        timeoutMs,
+        `runNow task "${task.name}" (${taskId})`,
+      );
       // Stats-only save: non-critical — log but don't fail the run
       await this.saveTasks().catch(err =>
         logger.error({ err, taskId }, 'Failed to persist task stats after runNow'),
@@ -478,7 +483,12 @@ export class Scheduler {
           task.lastRun = Date.now();
           task.runCount++;
           task.consecutiveSkips = 0;
-          await this.taskHandler(task);
+          const timeoutMs = task.timeoutMs ?? SCHEDULER_DEFAULT_TIMEOUT_MS;
+          await withTimeout(
+            this.taskHandler(task),
+            timeoutMs,
+            `scheduled task "${task.name}" (${task.id})`,
+          );
           // Stats-only save: non-critical — log but let the cron job keep running
           await this.saveTasks().catch(err =>
             logger.error({ err, taskId: task.id, taskName: task.name }, 'Failed to persist task stats after scheduled run'),
