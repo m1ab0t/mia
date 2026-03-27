@@ -595,10 +595,15 @@ export class OpenCodePlugin implements CodingPlugin {
       child.stdout?.resume();
       child.stderr?.resume();
     });
-    const deadline = new Promise<boolean>((resolve) =>
-      setTimeout(() => resolve(false), 12_000)
-    );
-    return Promise.race([check, deadline]);
+    // Use withTimeout so the deadline timer is cleared when `check` resolves
+    // first — prevents a 12-second timer leak on every availability call.
+    // withTimeout also attaches a no-op .catch() on `check` so late rejections
+    // from the execFile callback don't reach the unhandledRejection counter.
+    try {
+      return await withTimeout(check, 12_000, 'opencode --version');
+    } catch {
+      return false;
+    }
   }
 
   // ── Session management ─────────────────────────────────────────────
