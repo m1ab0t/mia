@@ -771,6 +771,36 @@ export function stopWatcher(cwd: string): void {
 }
 
 /**
+ * Flush the entire snapshot cache and close all fs watchers.
+ *
+ * Called under memory pressure so the daemon can reclaim heap used by
+ * cached file-path arrays and git-state objects.  Watchers are also
+ * closed because they hold inotify/kqueue descriptors — flushing them
+ * prevents descriptor exhaustion when the daemon runs across many
+ * directories over a long uptime.
+ *
+ * After this call, the next `scanWorkspace()` / `scanWorkspaceAsync()`
+ * for any directory performs a fresh scan, recreates its cache entry,
+ * and restarts its watcher exactly as it would on first access —
+ * zero functional change, just a one-time performance cost.
+ *
+ * @returns Number of cache entries (and watchers) that were cleared.
+ */
+export function flushSnapshotCache(): number {
+  const count = snapshotCache.size;
+
+  // Close all fs.watch instances before clearing the map so inotify/kqueue
+  // descriptors are released immediately rather than waiting for GC.
+  for (const watcher of watcherMap.values()) {
+    try { watcher.close(); } catch { /* already closed — ignore */ }
+  }
+  watcherMap.clear();
+  snapshotCache.clear();
+
+  return count;
+}
+
+/**
  * Scan workspace and create snapshot.
  * Results are cached per `cwd` for up to 30 seconds, but the cache is
  * busted immediately when fs events are detected via a recursive fs.watch,

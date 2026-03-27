@@ -9,6 +9,7 @@ export {
   scanGitState,
   scanGitStateAsync,
   resetCacheTtls,
+  flushSnapshotCache,
   type GitState,
   type FileStructure,
   type WorkspaceSnapshot,
