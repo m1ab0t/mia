@@ -303,9 +303,17 @@ export class LineParser {
     // Overflow guard — discard the partial buffer if it grows too large.
     // Without this, a stream that never emits newlines (binary garbage,
     // verbose native addon output) would grow the heap without bound.
+    //
+    // Buffer is cleared BEFORE calling onOverflow so that a throwing callback
+    // never leaves the buffer in an oversized state.  Without this ordering, a
+    // throwing onOverflow skips `this.buffer = ''`, causing every subsequent
+    // write() call to re-trigger the overflow path — flooding logs and
+    // repeatedly firing the overflow callback against the same stale content.
+    // Mirrors the safety pattern used by NdjsonParser.write().
     if (this.buffer.length > this.maxBufferBytes) {
-      try { this.onOverflow?.(this.buffer.length); } catch { /* callback must never crash the parser */ }
+      const overflowBytes = this.buffer.length;
       this.buffer = '';
+      try { this.onOverflow?.(overflowBytes); } catch { /* callback must never crash the parser */ }
     }
 
     for (const line of lines) {
