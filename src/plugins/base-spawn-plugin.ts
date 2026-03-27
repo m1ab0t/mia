@@ -1567,43 +1567,52 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     }
 
     setTimeout(() => {
-      if (this.processes.has(taskId)) {
-        try { child.kill('SIGKILL'); } catch { /* already dead */ }
-        destroyChildStreams(child);
-        this.processes.delete(taskId);
+      // Top-level guard: a synchronous throw from any cleanup step (e.g.
+      // destroyChildStreams, Map operations) must never escape a timer callback
+      // as an uncaughtException — that would kill the 24/7 daemon.  Matches the
+      // same defensive pattern used by _setupStallTimer and _setupTimeout.
+      try {
+        if (this.processes.has(taskId)) {
+          try { child.kill('SIGKILL'); } catch { /* already dead */ }
+          destroyChildStreams(child);
+          this.processes.delete(taskId);
 
-        // Remove from _killedTaskIds so it doesn't grow unbounded.  The close
-        // and error handlers normally do this delete, but when a process is
-        // stuck in D-state (uninterruptible kernel wait) it never emits those
-        // events — only this force-kill timeout fires.  Without this delete,
-        // every D-state abort leaks one entry in _killedTaskIds for the entire
-        // daemon lifetime.
-        this._killedTaskIds.delete(taskId);
+          // Remove from _killedTaskIds so it doesn't grow unbounded.  The close
+          // and error handlers normally do this delete, but when a process is
+          // stuck in D-state (uninterruptible kernel wait) it never emits those
+          // events — only this force-kill timeout fires.  Without this delete,
+          // every D-state abort leaks one entry in _killedTaskIds for the entire
+          // daemon lifetime.
+          this._killedTaskIds.delete(taskId);
 
-        // Clear the stall timer (setInterval) for this task.  The close and
-        // error handlers normally do this via their local stallTimer variable,
-        // but they never fire in D-state.  Without this clear, each D-state
-        // abort leaks one setInterval (firing every 60 s as a no-op) for the
-        // daemon's lifetime — a permanent resource leak from an unrecoverable
-        // kernel-level hang.
-        const stallTimer = this._stallTimers.get(taskId);
-        if (stallTimer !== undefined) {
-          clearInterval(stallTimer);
-          this._stallTimers.delete(taskId);
+          // Clear the stall timer (setInterval) for this task.  The close and
+          // error handlers normally do this via their local stallTimer variable,
+          // but they never fire in D-state.  Without this clear, each D-state
+          // abort leaks one setInterval (firing every 60 s as a no-op) for the
+          // daemon's lifetime — a permanent resource leak from an unrecoverable
+          // kernel-level hang.
+          const stallTimer = this._stallTimers.get(taskId);
+          if (stallTimer !== undefined) {
+            clearInterval(stallTimer);
+            this._stallTimers.delete(taskId);
+          }
+
+          // Safety net: if the close event never fires (process stuck in D-state,
+          // Node.js bug), the conversation's activeConversations entry is never
+          // cleared and any queued messages are stuck forever.  Calling
+          // _onTaskFinished here ensures the conversation is unblocked.
+          //
+          // If close fires later, _onTaskFinished is called again — but the
+          // didVacate guard inside it prevents double-dequeue, so this is safe.
+          try {
+            this._onTaskFinished(taskId);
+          } catch {
+            // Best-effort cleanup — must never throw from a timer callback.
+          }
         }
-
-        // Safety net: if the close event never fires (process stuck in D-state,
-        // Node.js bug), the conversation's activeConversations entry is never
-        // cleared and any queued messages are stuck forever.  Calling
-        // _onTaskFinished here ensures the conversation is unblocked.
-        //
-        // If close fires later, _onTaskFinished is called again — but the
-        // didVacate guard inside it prevents double-dequeue, so this is safe.
-        try {
-          this._onTaskFinished(taskId);
-        } catch {
-          // Best-effort cleanup — must never throw from a timer callback.
-        }
+      } catch {
+        // Last-resort safety net — prevent any unexpected synchronous throw
+        // from escaping the setTimeout callback as an uncaughtException.
       }
     }, ABORT_FORCE_KILL_DELAY_MS);
 
