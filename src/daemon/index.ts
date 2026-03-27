@@ -41,7 +41,7 @@ const MIA_COMMIT = typeof __MIA_COMMIT__ !== 'undefined' ? __MIA_COMMIT__ : 'dev
 import { readMiaConfig, readMiaConfigAsync, readMiaConfigStrict, writeMiaConfigAsync } from '../config';
 import { gatherCodebaseContext } from '../utils/codebase_context';
 import { log } from '../utils/logger';
-import { cacheCodebaseContext } from '../context/index';
+import { cacheCodebaseContext, flushSnapshotCache } from '../context/index';
 import {
   writePidFile, removePidFile, removePidFileIfOwned,
   removeStatusFile, removeStatusFileIfOwned, LOG_FILE,
@@ -1455,9 +1455,26 @@ async function main() {
             // 4. Sweep any stale traces that haven't completed.
             const swept = traceLogger.sweepStaleTraces();
 
+            // 5. Flush the workspace snapshot cache.
+            //    The cache maps workingDirectory → WorkspaceSnapshot (file-path
+            //    arrays + git state).  Entries accumulate for every unique cwd
+            //    ever dispatched to and are never proactively evicted — under
+            //    memory pressure they can hold megabytes of file-path strings.
+            //    Flushing is safe: the next scanWorkspace() call for any
+            //    directory performs a fresh scan and repopulates the cache.
+            //    fs.watch instances are closed too, releasing inotify/kqueue
+            //    descriptors that otherwise accumulate over long daemon uptime.
+            let flushedSnapshots = 0;
+            try {
+              flushedSnapshots = flushSnapshotCache();
+            } catch {
+              // Non-critical — never let a snapshot-flush error block recovery.
+            }
+
             log('warn',
               `MEMORY PRESSURE: flushed caches (${freed} query cache entries cleared, ` +
-              `${released} task result(s) released, ${swept} stale trace(s) swept) ` +
+              `${released} task result(s) released, ${swept} stale trace(s) swept, ` +
+              `${flushedSnapshots} workspace snapshot(s) flushed) ` +
               `at RSS ${rssMb.toFixed(0)} MB`,
             );
           } catch (cleanupErr: unknown) {
