@@ -108,8 +108,19 @@ export async function initMessageStore(): Promise<void> {
 
 export async function closeMessageStore(): Promise<void> {
   if (db) {
-    await db.close();
+    // Null out `db` BEFORE awaiting close so that a concurrent initMessageStore()
+    // call (or a caller whose withTimeout() fires before db.close() resolves)
+    // sees db=null and triggers a clean reinit rather than reusing a
+    // half-closed handle.  Without this, a close timeout leaves db non-null
+    // and every subsequent initMessageStore() returns early — permanently
+    // breaking message persistence for the rest of the daemon's lifetime.
+    const closing = db;
     db = null;
+    try {
+      await closing.close();
+    } catch (err) {
+      logger.warn({ err }, '[MessageStore] close() failed — handle discarded, store can reinitialise');
+    }
   }
 }
 
