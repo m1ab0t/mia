@@ -140,7 +140,17 @@ async function loadFromDisk(): Promise<SessionStore> {
   return { v: 1, sessions: {} };
 }
 
-async function writeToDisk(store: SessionStore): Promise<void> {
+/**
+ * Returns `true` on success, `false` if the write failed.
+ *
+ * Returning a boolean (rather than swallowing and returning void) lets
+ * `scheduleFlush` detect failure and re-mark `dirty=true` so the next
+ * `saveSession()` call triggers a retry.  Without this signal, a failed
+ * write leaves sessions un-persisted with `dirty=false` — they exist only
+ * in the in-memory cache and would be silently lost on daemon restart if
+ * no further `saveSession()` calls occur before shutdown.
+ */
+async function writeToDisk(store: SessionStore): Promise<boolean> {
   try {
     // Wrapped in withTimeout: mkdir() can hang indefinitely under I/O
     // pressure (NFS stall, FUSE deadlock, swap thrash) even when the
@@ -163,35 +173,66 @@ async function writeToDisk(store: SessionStore): Promise<void> {
       WRITE_TIMEOUT_MS,
       'SessionPersistence write',
     );
+    return true;
   } catch {
-    // Non-fatal: next daemon restart will just miss these sessions
+    // Non-fatal: scheduleFlush will re-mark dirty so a retry is scheduled
+    // on the next saveSession() call.
+    return false;
   }
 }
 
 function scheduleFlush(): void {
   if (flushTimer) return; // already scheduled
-  flushTimer = setTimeout(async () => {
-    flushTimer = null;
-
-    // If a previous write is still in flight, don't start a second one.
-    // The dirty flag stays true so the post-write re-schedule below will
-    // pick it up once the in-flight write finishes.
-    if (flushInProgress) return;
-
-    if (dirty && cache) {
-      dirty = false;
-      flushInProgress = true;
+  flushTimer = setTimeout(() => {
+    // Immediately-invoked async IIFE — setTimeout expects a synchronous
+    // callback.  Wrapping in void() ensures the returned Promise is never
+    // an unhandled rejection (mirrors the same pattern used by the daemon's
+    // restart-signal poller and other setInterval/setTimeout async bodies).
+    void (async () => {
+      // Top-level try/catch: if any step throws unexpectedly (e.g. future
+      // code changes to writeToDisk or scheduleFlush), the exception is
+      // swallowed here instead of escaping as an unhandled rejection that
+      // counts toward the daemon's 10-rejection exit threshold.
       try {
-        await writeToDisk(cache);
-      } finally {
-        flushInProgress = false;
+        flushTimer = null;
+
+        // If a previous write is still in flight, don't start a second one.
+        // The dirty flag stays true so the post-write re-schedule below will
+        // pick it up once the in-flight write finishes.
+        if (flushInProgress) return;
+
+        if (dirty && cache) {
+          // Clear dirty BEFORE the write so that any saveSession() calls
+          // arriving during the write correctly set dirty=true (triggering
+          // a follow-up flush) rather than being masked by a post-write clear.
+          dirty = false;
+          flushInProgress = true;
+          let writeOk = false;
+          try {
+            writeOk = await writeToDisk(cache);
+          } finally {
+            flushInProgress = false;
+          }
+
+          if (!writeOk) {
+            // Write failed — re-mark dirty so the next saveSession() call
+            // schedules a retry flush.  Without this, a failed write leaves
+            // sessions un-persisted with dirty=false; they would be silently
+            // lost on daemon restart if no further saveSession() calls happen.
+            dirty = true;
+          }
+
+          // If new saves arrived while we were writing (or write failed),
+          // schedule another flush so they don't sit in memory indefinitely.
+          if (dirty) {
+            scheduleFlush();
+          }
+        }
+      } catch {
+        // Safety net: must never propagate — session persistence failures
+        // are non-critical and must not affect daemon stability.
       }
-      // If new saves arrived while we were writing, schedule another flush
-      // so they don't sit in memory until the next explicit save/flush call.
-      if (dirty) {
-        scheduleFlush();
-      }
-    }
+    })();
   }, FLUSH_DELAY_MS);
 }
 
