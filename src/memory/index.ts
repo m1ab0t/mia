@@ -245,7 +245,10 @@ export class MemoryStore {
     if (!this.db || !this._vectorsReady) return;
     const db = this.db;
     backfillEmbeddings(db).catch(err => {
-      logger.warn({ err }, 'Background embedding backfill failed');
+      // Nested try/catch: logger.warn() inside a .catch() callback can itself
+      // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+      // rejection that counts toward the daemon's 10-rejection exit threshold.
+      try { logger.warn({ err }, 'Background embedding backfill failed'); } catch { /* logger must not throw */ }
     });
   }
 
