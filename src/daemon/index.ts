@@ -1122,13 +1122,31 @@ async function main() {
     }
   };
 
+  // Wrap performRestart in a void-returning function before passing as the
+  // onRestart callback.  HandlerCtx types onRestart as () => void, so
+  // handleRestart() calls ctx.onRestart() without attaching .catch().
+  // If performRestart() were passed directly, any rejection escaping its
+  // internal try/catch (e.g. a Pino log() call throwing while the output
+  // stream is broken) would become an unhandled rejection that increments
+  // the daemon's 10-rejection-in-5-minutes exit threshold — potentially
+  // crashing the daemon right when it was trying to restart cleanly.
+  const safePerformRestart = (): void => {
+    performRestart().catch((err: unknown) => {
+      try {
+        log('error', `Restart initiation failed unexpectedly: ${getErrorMessage(err)}`);
+      } catch { /* log itself must never propagate */ }
+      // Clear the in-progress guard so a subsequent restart attempt can proceed.
+      restartInProgress = false;
+    });
+  };
+
   const p2pResult = await time('p2p', () => spawnP2PSubAgent(
     handleMessage,
     queue,
     (name) => pluginDispatcher.switchPlugin(name),
     () => pluginDispatcher.getPluginsInfo(),
     log,
-    performRestart,
+    safePerformRestart,
     () => {
       // Use isP2PDispatching() instead of plugin.getRunningTaskCount() so
       // that background scheduler dispatches (which go directly to the plugin
