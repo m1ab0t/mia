@@ -968,9 +968,16 @@ export class PluginDispatcher {
     // I/O pressure (NFS stall, swap thrashing), freezing P2P, watchdog, and
     // all plugin dispatch callbacks for the duration of the file write.
     writeMiaConfigAsync({ activePlugin: name }).catch((err: unknown) => {
-      process.stderr.write(
-        `[Dispatcher] switchPlugin config persist failed (in-memory state is still correct): ${err}\n`,
-      );
+      // Nested try/catch: if process.stderr.write() throws (e.g. ERR_STREAM_DESTROYED
+      // after the daemon closes the pipe), the throw would escape this .catch() callback
+      // as a new unhandled rejection, counting toward the daemon's 10-rejection exit
+      // threshold.  The in-memory plugin switch already succeeded — log failure must not
+      // cascade into a crash.
+      try {
+        process.stderr.write(
+          `[Dispatcher] switchPlugin config persist failed (in-memory state is still correct): ${err}\n`,
+        );
+      } catch { /* stderr must not throw */ }
     });
     return { success: true };
   }
