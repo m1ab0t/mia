@@ -85,7 +85,11 @@ function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
   // the chain advances — subsequent writes are not affected.
   const timedFn = () => withTimeout(fn(), WRITE_TIMEOUT_MS, 'MessageStore write');
   const next = writeQueue.then(timedFn, timedFn); // advance even if previous write failed
-  writeQueue = next.catch((err) => { logger.warn({ err }, '[MessageStore] Write operation failed or timed out — queue advancing'); }); // swallow to keep the chain alive
+  // Nested try/catch: logger.warn() inside a .catch() callback can itself throw
+  // (pino EPIPE under I/O pressure), which would make writeQueue a rejected promise
+  // — breaking the chain and orphaning all subsequent writes until the next write
+  // resets it.  The guard ensures the chain always advances even when logging fails.
+  writeQueue = next.catch((err) => { try { logger.warn({ err }, '[MessageStore] Write operation failed or timed out — queue advancing'); } catch { /* logger must not throw */ } }); // swallow to keep the chain alive
   return next;
 }
 

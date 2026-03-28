@@ -553,7 +553,10 @@ export class PluginDispatcher {
       this.memoryExtractor
         .extractAndStore(prompt, result, conversationId, workingDir)
         .catch((err: unknown) => {
-          logger.warn({ err }, `[MemoryExtractor] Background extraction failed: ${getErrorMessage(err)}`);
+          // Nested try/catch: logger.warn() inside a .catch() callback can itself
+          // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+          // rejection that counts toward the daemon's 10-rejection exit threshold.
+          try { logger.warn({ err }, `[MemoryExtractor] Background extraction failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
         });
     }
 
