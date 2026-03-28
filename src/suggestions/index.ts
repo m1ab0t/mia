@@ -312,7 +312,10 @@ function persistToDisk(): void {
 
   withTimeout(writeFile(STORE_PATH, json, 'utf-8'), PERSIST_TIMEOUT_MS, 'Suggestions persist')
     .catch((err) => {
-      process.stderr.write(`[Suggestions] Async persist failed: ${err}\n`);
+      // Nested try/catch: if process.stderr.write() throws (e.g. ERR_STREAM_DESTROYED
+      // after the daemon closes the pipe), the throw would escape this .catch() callback
+      // as a new unhandled rejection, counting toward the 10-rejection exit threshold.
+      try { process.stderr.write(`[Suggestions] Async persist failed: ${err}\n`); } catch { /* stderr must not throw */ }
     })
     .finally(() => {
       persistInFlight = false;
