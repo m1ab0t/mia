@@ -261,9 +261,14 @@ async function ensureMessageStore(): Promise<boolean> {
       // WRITE_BUFFER_MAX (500) entries would block ensureMessageStore() for up
       // to 500 × WRITE_TIMEOUT_MS (10 s) = 5000 s in the worst case, stalling
       // the AI dispatch path for every new conversation during that window.
-      flushWriteBuffer().catch(err =>
-        logger.error({ err }, '[P2P] Write buffer flush failed — entries may be lost'),
-      );
+      flushWriteBuffer().catch((err: unknown) => {
+        // Nested try/catch: if logger.error() throws (e.g. pino gets EPIPE
+        // when the daemon closes the IPC pipe during a restart), the throw
+        // would escape this .catch() callback as a new unhandled rejection,
+        // counting toward the P2P agent's 10-rejection exit threshold and
+        // potentially triggering a crash-restart loop.
+        try { logger.error({ err }, '[P2P] Write buffer flush failed — entries may be lost'); } catch { /* logger must not throw */ }
+      });
       return true;
     } catch (err) {
       logger.error({ err }, '[P2P] Lazy message store init failed');
@@ -282,9 +287,12 @@ async function flushWriteBuffer(): Promise<void> {
   writeBuffer = [];
   logger.debug(`[P2P] Flushing ${pending.length} buffered write(s) to message store`);
   for (const entry of pending) {
-    await putMessage(entry).catch(err =>
-      logger.error({ err }, '[P2P] Buffered persist failed'),
-    );
+    await putMessage(entry).catch((err: unknown) => {
+      // Nested try/catch: mirrors the guard on every other .catch() logger call
+      // in this file — a pino EPIPE throw inside a .catch() callback creates a
+      // new unhandled rejection that counts toward the exit threshold.
+      try { logger.error({ err }, '[P2P] Buffered persist failed'); } catch { /* logger must not throw */ }
+    });
   }
 }
 
@@ -299,7 +307,11 @@ function persistEntry(entry: Omit<StoredMessage, 'id'>): void {
     }
     return;
   }
-  putMessage(entry).catch(err => logger.error({ err }, '[P2P] Persist failed'));
+  putMessage(entry).catch((err: unknown) => {
+    // Nested try/catch: a pino EPIPE throw inside a .catch() callback creates
+    // a new unhandled rejection — same protection pattern used throughout.
+    try { logger.error({ err }, '[P2P] Persist failed'); } catch { /* logger must not throw */ }
+  });
 }
 
 // ── Callback registrations ────────────────────────────────────────────
@@ -511,8 +523,14 @@ function autoNameConversation(targetConvId?: string): void {
     await Promise.allSettled(
       [...connections.values()].map(conn => sendConversationListTo(conn, ctx)),
     );
-  })().catch((err) => {
-    logger.error({ err }, '[P2P] Auto-name failed');
+  })().catch((err: unknown) => {
+    // Nested try/catch: if logger.error() throws (pino EPIPE when the daemon
+    // closes the IPC pipe during a restart), the throw would escape this
+    // .catch() callback as a new unhandled rejection, counting toward the P2P
+    // agent's 10-rejection exit threshold.  autoNameConversation() is called
+    // on every user message, making this a high-frequency hot path where stacked
+    // rejections during a restart window could quickly hit the exit threshold.
+    try { logger.error({ err }, '[P2P] Auto-name failed'); } catch { /* logger must not throw */ }
   });
 }
 
@@ -777,7 +795,10 @@ function scheduleFlush(): void {
     // practice, but defensive .catch() is consistent with every other async
     // fire-and-forget call site in the codebase.
     flushToDiskAsync().catch((err: unknown) => {
-      logger.warn({ err }, '[swarm-core] token-usage cache flush failed');
+      // Nested try/catch: a pino EPIPE throw inside a .catch() callback becomes
+      // a new unhandled rejection — consistent with every other .catch() guard
+      // in this file (flushWriteBuffer, putMessage, autoNameConversation).
+      try { logger.warn({ err }, '[swarm-core] token-usage cache flush failed'); } catch { /* logger must not throw */ }
     });
   }, 2_000);
   // Prevent this timer from keeping the process alive during shutdown —

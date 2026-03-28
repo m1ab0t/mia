@@ -1299,12 +1299,18 @@ const controlHandlers = {
     if (cb) {
       cb({ action: 'generate' })
         .catch((err: unknown) => {
-          logger.warn({ err }, '[P2P] suggestions_refresh generation failed — resetting generating flag');
-          ctx.setSuggestionsGenerating(false);
+          // Nested try/catch on each statement: if logger.warn() or sendToAll()
+          // throws (e.g. pino EPIPE when the daemon closes the IPC pipe during a
+          // restart), the throw would escape this .catch() callback as a new
+          // unhandled rejection, counting toward the P2P agent's 10-rejection
+          // exit threshold.  Each statement is guarded independently so a throw
+          // from logger.warn() doesn't prevent the spinner-reset from running.
+          try { logger.warn({ err }, '[P2P] suggestions_refresh generation failed — resetting generating flag'); } catch { /* logger must not throw */ }
+          try { ctx.setSuggestionsGenerating(false); } catch { /* best-effort */ }
           // Send empty suggestions so the mobile client stops showing the
           // generating spinner.  Uses the existing 'suggestions' message type
           // that broadcastSuggestions() would normally send on success.
-          sendToAll({ type: 'suggestions', suggestions: [], greetings: [] });
+          try { sendToAll({ type: 'suggestions', suggestions: [], greetings: [] }); } catch { /* best-effort */ }
         });
     } else {
       ctx.setSuggestionsGenerating(false);
