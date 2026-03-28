@@ -354,8 +354,11 @@ class PeerWriteQueue {
     // while-iteration, so we never lose frames between pushes.
     if (!this.draining) {
       this._drain().catch((err: unknown) => {
-        logger.debug({ err, key: this.key }, '[P2P] Write queue drain error — evicting peer');
-        this._evict();
+        // Nested try/catch: logger.debug() inside a .catch() callback can itself
+        // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+        // rejection that counts toward the P2P agent's 10-rejection exit threshold.
+        try { logger.debug({ err, key: this.key }, '[P2P] Write queue drain error — evicting peer'); } catch { /* logger must not throw */ }
+        try { this._evict(); } catch { /* evict must not propagate from a .catch() callback */ }
       });
     }
   }
