@@ -294,6 +294,22 @@ process.stdout.on('error', (err: Error) => {
   // triggering the graceful shutdown path below.
 });
 
+// Absorb stderr EPIPE / stream errors so they don't become uncaughtExceptions.
+// process.stdout and process.stdin already have error handlers above/below.
+// process.stderr is the missing third: when the daemon closes the agent's
+// stderr pipe (e.g. on daemon shutdown or restart), the P2P agent's
+// process.stderr emits an 'error' event (typically EPIPE).  Without a
+// listener, Node.js propagates the unhandled EventEmitter error as an
+// uncaughtException → the p2p-agent's uncaughtException handler calls
+// process.exit(1) → mobile connectivity is severed.
+// The daemon's p2p-restart manager will relaunch the agent, but the gap
+// is avoidable.  We cannot write to stderr inside its own error handler
+// (would recurse), so we simply absorb the error silently.
+process.stderr.on('error', () => {
+  // Silently absorb stderr stream errors (EPIPE, EBADF, etc.).
+  // Logging is best-effort; a broken stderr pipe must never crash the agent.
+});
+
 // ── stdin → daemon commands ───────────────────────────────────────────────
 
 /**
