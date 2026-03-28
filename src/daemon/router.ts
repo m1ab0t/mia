@@ -214,7 +214,10 @@ export async function routeMessage(
           return r.taskId
         })
         .catch((err: Error) => {
-          logger('error', `Plugin dispatch failed: ${err.message}`)
+          // Nested try/catch: logger() inside a .catch() callback can itself throw
+          // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+          // that counts toward the daemon's 10-rejection exit threshold.
+          try { logger('error', `Plugin dispatch failed: ${err.message}`) } catch { /* logger must not throw */ }
           const isPluginErr = err instanceof PluginError
           sendP2PPluginError(
             isPluginErr ? err.code : PluginErrorCode.UNKNOWN,
