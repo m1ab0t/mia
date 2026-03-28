@@ -47,6 +47,24 @@ export function startHealthServer(
   const server: Server = createServer((req, res) => {
     // Only respond to GET /health
     if (req.method !== 'GET' || req.url !== '/health') {
+      // Drain any unread request body before responding.
+      //
+      // For HTTP/1.1 keep-alive connections that send a body (POST, PUT, etc.),
+      // Node.js's HTTP/1.1 framing requires the body to be fully consumed before
+      // the socket can be safely reused for the next request.  Without req.resume(),
+      // the socket sits in a "dirty" state — unread bytes remain in the receive
+      // buffer — and Node.js sets Connection: close to avoid protocol confusion.
+      // That means every unexpected request forces a TCP teardown + reconnect, which:
+      //   1. Holds the socket FD open until the OS reclaims it (up to TIME_WAIT)
+      //   2. Under probe storms (aggressive monitoring, port scanners) can race the
+      //      maxConnections=10 cap, blocking legitimate health probes
+      //
+      // req.resume() puts the request stream in flowing mode so Node.js discards
+      // the body immediately, the socket stays clean, and the connection is either
+      // properly recycled (keep-alive) or cleanly closed — no FD held beyond the
+      // response.  This is the correct HTTP-level fix; the socket timeout is a
+      // second line of defence, not a replacement.
+      try { req.resume(); } catch { /* stream already ended or destroyed */ }
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not Found');
       return;
