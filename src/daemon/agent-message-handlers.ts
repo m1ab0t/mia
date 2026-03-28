@@ -246,8 +246,14 @@ export function handlePluginsRequest(
       });
     })
     .catch((err) => {
-      ctx.log('warn', `Plugins request failed: ${getErrorMessage(err)}`);
-      sendDaemonToAgent({ type: 'plugins_list', requestId: msg.requestId, plugins: [], activePlugin: '' });
+      // Nested try/catch on each statement: if ctx.log() throws (e.g. pino
+      // EPIPE under I/O pressure or log rotation), the throw would escape this
+      // .catch() callback as a new unhandled rejection, counting toward the
+      // daemon's 10-rejection exit threshold.  Without the guard, a log failure
+      // also prevents the sendDaemonToAgent() fallback — leaving the P2P agent
+      // waiting forever for a plugins_list response.
+      try { ctx.log('warn', `Plugins request failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+      try { sendDaemonToAgent({ type: 'plugins_list', requestId: msg.requestId, plugins: [], activePlugin: '' }); } catch { /* best-effort */ }
     });
 }
 
@@ -268,8 +274,10 @@ export function handlePluginTest(
       });
     })
     .catch((err) => {
-      ctx.log('warn', `Plugin test failed: ${getErrorMessage(err)}`);
-      sendDaemonToAgent({ type: 'plugin_test_result', requestId: msg.requestId, success: false, output: '', elapsed: 0, pluginName: '', error: getErrorMessage(err) });
+      // Same nested try/catch pattern: guards against ctx.log() throwing and
+      // leaving the P2P agent waiting for a plugin_test_result response.
+      try { ctx.log('warn', `Plugin test failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+      try { sendDaemonToAgent({ type: 'plugin_test_result', requestId: msg.requestId, success: false, output: '', elapsed: 0, pluginName: '', error: getErrorMessage(err) }); } catch { /* best-effort */ }
     });
 }
 
@@ -316,8 +324,10 @@ Make it specific, opinionated, and distinct. Keep it under 40 lines. Output ONLY
     sendDaemonToAgent({ type: 'persona_generate_result', requestId: msg.requestId, content });
   })(), 120_000, 'persona_generate')
     .catch((err) => {
-      ctx.log('warn', `Persona generation failed: ${getErrorMessage(err)}`);
-      sendDaemonToAgent({ type: 'persona_generate_result', requestId: msg.requestId, content: '', error: getErrorMessage(err) });
+      // Same nested try/catch pattern: guards against ctx.log() throwing and
+      // leaving the P2P agent waiting for a persona_generate_result response.
+      try { ctx.log('warn', `Persona generation failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+      try { sendDaemonToAgent({ type: 'persona_generate_result', requestId: msg.requestId, content: '', error: getErrorMessage(err) }); } catch { /* best-effort */ }
     });
 }
 
@@ -350,7 +360,12 @@ export function handleSuggestions(
         suggestions = msg.id ? svc.restore(msg.id) : svc.getActive();
         break;
       case 'generate':
-        svc.generate().catch(err => ctx.log('warn', `Suggestions background generate failed: ${getErrorMessage(err)}`));
+        svc.generate().catch(err => {
+          // Nested try/catch: ctx.log() inside a .catch() callback can itself
+          // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+          // rejection that counts toward the daemon's 10-rejection exit threshold.
+          try { ctx.log('warn', `Suggestions background generate failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+        });
         suggestions = svc.getActive();
         break;
       case 'clear_history':
@@ -366,8 +381,10 @@ export function handleSuggestions(
     });
   })(), DAEMON_TIMEOUTS.IPC_HANDLER_MS, 'control_suggestions')
     .catch((err) => {
-      ctx.log('warn', `Suggestions action failed: ${getErrorMessage(err)}`);
-      sendDaemonToAgent({ type: 'suggestions_list', requestId: msg.requestId, suggestions: [] });
+      // Same nested try/catch pattern: guards against ctx.log() throwing and
+      // leaving the P2P agent waiting for a suggestions_list response.
+      try { ctx.log('warn', `Suggestions action failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+      try { sendDaemonToAgent({ type: 'suggestions_list', requestId: msg.requestId, suggestions: [] }); } catch { /* best-effort */ }
     });
 }
 
@@ -385,8 +402,10 @@ export function handleDailyGreeting(
     });
   })(), DAEMON_TIMEOUTS.IPC_HANDLER_MS, 'control_daily_greeting')
     .catch((err) => {
-      ctx.log('warn', `Daily greeting failed: ${getErrorMessage(err)}`);
-      sendDaemonToAgent({ type: 'daily_greeting_response', requestId: msg.requestId, message: '' });
+      // Same nested try/catch pattern: guards against ctx.log() throwing and
+      // leaving the P2P agent waiting for a daily_greeting_response response.
+      try { ctx.log('warn', `Daily greeting failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+      try { sendDaemonToAgent({ type: 'daily_greeting_response', requestId: msg.requestId, message: '' }); } catch { /* best-effort */ }
     });
 }
 
@@ -451,8 +470,10 @@ export function handleScheduler(
     sendDaemonToAgent({ type: 'scheduler_response', requestId: msg.requestId, tasks });
   })(), DAEMON_TIMEOUTS.IPC_HANDLER_MS, 'control_scheduler')
     .catch((err) => {
-      ctx.log('warn', `Scheduler control failed: ${getErrorMessage(err)}`);
-      sendDaemonToAgent({ type: 'scheduler_response', requestId: msg.requestId, tasks: [] });
+      // Same nested try/catch pattern: guards against ctx.log() throwing and
+      // leaving the P2P agent waiting for a scheduler_response response.
+      try { ctx.log('warn', `Scheduler control failed: ${getErrorMessage(err)}`); } catch { /* log must not throw */ }
+      try { sendDaemonToAgent({ type: 'scheduler_response', requestId: msg.requestId, tasks: [] }); } catch { /* best-effort */ }
     });
 }
 
