@@ -915,7 +915,10 @@ async function main() {
     // Fire-and-forget — the abort is best-effort. If it fails, the plugin's
     // own timeout will eventually kill the process.
     pluginDispatcher.abortConversation(convId).catch((err: unknown) => {
-      log('warn', `Scheduler: abortConversation failed for "${convId}": ${getErrorMessage(err)}`);
+      // Nested try/catch: log() inside a .catch() callback can itself throw
+      // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+      // that counts toward the daemon's 10-rejection exit threshold.
+      try { log('warn', `Scheduler: abortConversation failed for "${convId}": ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
     });
   });
 
@@ -1170,7 +1173,10 @@ async function main() {
       }
       log('info', `Abort generation: aborting dispatch for conversation "${convId}"`);
       pluginDispatcher.abortConversation(convId).catch((err: unknown) => {
-        log('warn', `Abort generation failed for "${convId}": ${getErrorMessage(err)}`);
+        // Nested try/catch: log() inside a .catch() callback can itself throw
+        // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+        // that counts toward the daemon's 10-rejection exit threshold.
+        try { log('warn', `Abort generation failed for "${convId}": ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
       });
     },
     () => pluginDispatcher.testPlugin(),
@@ -1178,7 +1184,10 @@ async function main() {
     (mode: 'coding' | 'general') => {
       // Persist mode switch to config and update dispatcher's active mode.
       writeMiaConfigAsync({ activeMode: mode }).catch((err: unknown) => {
-        log('warn', `Failed to persist mode switch: ${getErrorMessage(err)}`);
+        // Nested try/catch: log() inside a .catch() callback can itself throw
+        // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+        // that counts toward the daemon's 10-rejection exit threshold.
+        try { log('warn', `Failed to persist mode switch: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
       });
       pluginDispatcher.setActiveMode(mode);
       log('info', `Mode switched to '${mode}'`);
@@ -1252,7 +1261,10 @@ async function main() {
           60_000,
           'awakening',
         ).catch((err: unknown) => {
-          log('warn', `Awakening timed out or failed: ${getErrorMessage(err)}`);
+          // Nested try/catch: log() inside a .catch() callback can itself throw
+          // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+          // that counts toward the daemon's 10-rejection exit threshold.
+          try { log('warn', `Awakening timed out or failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
         });
       } else if (Date.now() - lastReconnectGestureAt > RECONNECT_GESTURE_COOLDOWN_MS) {
         // Reconnect: reference the user's last message instead of a
@@ -1268,12 +1280,18 @@ async function main() {
           8000,
           'reconnect-gesture',
         ).catch((err: unknown) => {
-          log('warn', `Reconnect gesture timed out: ${getErrorMessage(err)}`);
+          // Nested try/catch: log() inside a .catch() callback can itself throw
+          // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+          // that counts toward the daemon's 10-rejection exit threshold.
+          try { log('warn', `Reconnect gesture timed out: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
         });
       }
 
       suggestionsService.maybeGenerate().catch((err: unknown) => {
-        log('warn', `Suggestions generate failed: ${getErrorMessage(err)}`);
+        // Nested try/catch: log() inside a .catch() callback can itself throw
+        // (pino EPIPE under I/O pressure), escaping as a new unhandled rejection
+        // that counts toward the daemon's 10-rejection exit threshold.
+        try { log('warn', `Suggestions generate failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
       });
     });
   }
