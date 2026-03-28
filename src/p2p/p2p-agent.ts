@@ -326,9 +326,16 @@ const MAX_STDIN_BUFFER_BYTES = 10 * 1024 * 1024; // 10 MiB
 const stdinParser = new NdjsonParser<DaemonToAgent>({
   maxBufferBytes: MAX_STDIN_BUFFER_BYTES,
   onMessage: (cmd) => {
-    ipc.handleDaemonCommand(cmd).catch((err) =>
-      process.stderr.write(`[P2P Agent] Command handler error: ${err}\n`),
-    );
+    ipc.handleDaemonCommand(cmd).catch((err) => {
+      // Nested try/catch: if process.stderr.write() throws (e.g. ERR_STREAM_DESTROYED
+      // after the daemon closes the IPC pipe), the throw would escape this .catch()
+      // callback as a new unhandled rejection, counting toward the P2P agent's
+      // 10-rejection exit threshold.  Guard it so a broken stderr stream never
+      // cascades into P2P agent instability.
+      try {
+        process.stderr.write(`[P2P Agent] Command handler error: ${err}\n`);
+      } catch { /* stderr must not throw */ }
+    });
   },
   onParseError: (line) => {
     process.stderr.write(`[P2P Agent] Malformed stdin line: ${line.slice(0, 120)}\n`);
