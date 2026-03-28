@@ -1338,7 +1338,13 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
         try {
           await sendInitialSyncTo(conn, ctx, suggestionsGenerating);
         } catch (err: unknown) {
-          logger.error({ err }, '[P2P] Initial sync failed');
+          // Nested try/catch: if pino throws (EPIPE when the daemon closes the
+          // IPC pipe during a restart), the throw would escape this catch block
+          // and reject the async setTimeout callback's Promise.  Since
+          // setTimeout() does not handle returned Promises, this becomes an
+          // unhandled rejection — counting toward the P2P agent's 10-rejection
+          // exit threshold and potentially triggering a crash-restart loop.
+          try { logger.error({ err }, '[P2P] Initial sync failed'); } catch { /* logger must not throw */ }
         } finally {
           // Signal the mobile that the connection is fully ready — even if
           // initial sync was partial or failed, the socket is usable.

@@ -1406,10 +1406,19 @@ export function createConnectionDataHandler(
       // Log with context but do NOT emit 'error' on the connection — that
       // destroys the stream and kills mobile connectivity.  Swallow the
       // error so subsequent messages on this connection still get processed.
-      logger.error(
-        { err, bufferLen: connDataBuffer.length },
-        '[P2P] Unhandled error in connection data handler — connection preserved',
-      );
+      //
+      // Nested try/catch: if pino throws (EPIPE when the daemon closes the IPC
+      // pipe during a restart), the throw would escape this catch block and
+      // reject the async data-handler Promise.  Since conn.on('data', ...) does
+      // not handle the returned Promise, this becomes an unhandled rejection —
+      // counting toward the P2P agent's 10-rejection exit threshold and
+      // potentially triggering a crash-restart loop that severs all connectivity.
+      try {
+        logger.error(
+          { err, bufferLen: connDataBuffer.length },
+          '[P2P] Unhandled error in connection data handler — connection preserved',
+        );
+      } catch { /* logger must not throw */ }
     }
   };
 }
