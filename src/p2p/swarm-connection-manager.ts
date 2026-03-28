@@ -60,10 +60,21 @@ export function startKeepalive(conn: Duplex, key: string): void {
 
         state.missedPings++;
         if (state.missedPings > KEEPALIVE_MAX_MISSED) {
-          logger.warn(
-            { key, missed: state.missedPings },
-            '[P2P] Keepalive timeout — destroying zombie connection',
-          );
+          // Nested try/catch: if pino throws (EPIPE when the daemon closes
+          // the IPC pipe during a restart), the throw would escape to the
+          // outer catch, swallowing the exception — but also skipping
+          // stopKeepalive() and conn.destroy().  The zombie connection
+          // persists indefinitely and the setInterval timer keeps firing
+          // every 15 s, leaking both a Duplex FD and a timer.  Over time
+          // accumulated zombie connections exhaust the process's FD budget,
+          // preventing new mobile connections.  Guarding the logger call
+          // ensures cleanup always runs regardless of whether logging succeeds.
+          try {
+            logger.warn(
+              { key, missed: state.missedPings },
+              '[P2P] Keepalive timeout — destroying zombie connection',
+            );
+          } catch { /* logger must not prevent cleanup */ }
           stopKeepalive(conn);
           try { conn.destroy(); } catch { /* ignore */ }
           return;
