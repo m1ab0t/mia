@@ -246,34 +246,53 @@ export async function spawnP2PSubAgent(
       child.stdout.on('data', (chunk: string) => stdoutParser.write(chunk));
 
       child.on('error', (err) => {
-        log('error', `P2P agent process error: ${getErrorMessage(err)}`);
-        destroyChildStreams(child);
-        clearP2PSender();
-        if (!initialReady) {
-          resolve({ success: false, key: null, error: getErrorMessage(err) });
+        // Wrapped in try/catch: a throw from log() (e.g. pino EPIPE under I/O
+        // pressure) would otherwise escape as an uncaughtException and crash the
+        // daemon — right when it's handling a P2P agent failure.  We lose the
+        // error log but the daemon survives and the 'exit' event fires next,
+        // triggering the auto-restart path.
+        try {
+          try { log('error', `P2P agent process error: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
+          destroyChildStreams(child);
+          clearP2PSender();
+          if (!initialReady) {
+            resolve({ success: false, key: null, error: getErrorMessage(err) });
+          }
+          // Auto-restart is handled by the 'exit' event which always follows 'error'.
+        } catch {
+          // The error handler must never crash the daemon — swallow and continue.
         }
-        // Auto-restart is handled by the 'exit' event which always follows 'error'.
       });
 
       child.on('exit', (code, signal) => {
-        destroyChildStreams(child);
-        clearP2PSender();
-        cancelReconnectReadyTimer();
-        rm.onExit();
+        // Wrapped in try/catch: log() and rm.scheduleRestart() both call
+        // log() internally without try/catch.  If pino throws (EPIPE on stderr
+        // under I/O pressure), the exception would otherwise escape as an
+        // uncaughtException and kill the daemon — at exactly the worst moment
+        // (while trying to recover from a P2P agent crash, losing all mobile
+        // connectivity and preventing the auto-restart from ever firing).
+        try {
+          destroyChildStreams(child);
+          clearP2PSender();
+          cancelReconnectReadyTimer();
+          rm.onExit();
 
-        log('warn', `P2P agent exited (code=${code ?? 'null'}, signal=${signal ?? 'none'})`);
+          try { log('warn', `P2P agent exited (code=${code ?? 'null'}, signal=${signal ?? 'none'})`); } catch { /* logger must not throw */ }
 
-        if (!initialReady) {
-          resolve({ success: false, key: null, error: `P2P agent exited before ready (code=${code})` });
-          return;
+          if (!initialReady) {
+            resolve({ success: false, key: null, error: `P2P agent exited before ready (code=${code})` });
+            return;
+          }
+
+          if (rm.isStopped) {
+            try { log('info', 'P2P auto-restart disabled (daemon shutting down)'); } catch { /* logger must not throw */ }
+            return;
+          }
+
+          rm.scheduleRestart(spawnChild);
+        } catch {
+          // The exit handler must never crash the daemon — swallow and continue.
         }
-
-        if (rm.isStopped) {
-          log('info', 'P2P auto-restart disabled (daemon shutting down)');
-          return;
-        }
-
-        rm.scheduleRestart(spawnChild);
       });
     }
 
