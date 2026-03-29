@@ -178,8 +178,16 @@ export async function routeMessage(
             toolResultBytes += result?.length ?? 0
             sendP2PToolResult(name, result, undefined, effectiveConvId)
           },
-          onDone: async (result) => {
-            logger('debug', `[plugin:result] ${truncate(result, 100)}`)
+          onDone: (result) => {
+            // Nested try/catch: logger() (pino) can throw synchronously under I/O
+            // pressure (EPIPE, ERR_STREAM_DESTROYED).  Previously this callback was
+            // declared `async`, which meant a throw here rejected the returned
+            // Promise — but _emitDoneCallback in base-spawn-plugin calls onDone()
+            // without awaiting or handling the Promise, so the rejection was silently
+            // dropped as an unhandled rejection, incrementing the daemon's
+            // 10-rejection restart counter on every dispatch under I/O stress.
+            // Making the callback non-async and guarding the logger call prevents this.
+            try { logger('debug', `[plugin:result] ${truncate(result, 100)}`) } catch { /* logger must not throw */ }
             // swarm.ts persists the assistant message authoritatively inside
             // sendP2PResponseForConversation — don't write here too.
             sendP2PResponseForConversation(result, effectiveConvId)
