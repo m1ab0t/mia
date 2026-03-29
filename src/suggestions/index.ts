@@ -575,7 +575,11 @@ Respond with ONLY a valid JSON object — no markdown fences, no explanation:
       );
       this.broadcastFn?.(fresh.active, fresh.greetings);
     } catch (err) {
-      process.stderr.write(`[Suggestions] Generation failed: ${err}\n`);
+      // Nested try/catch: process.stderr.write() can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // would escape the catch block as a new unhandled rejection, counting
+      // toward the daemon's 10-rejection exit threshold.
+      try { process.stderr.write(`[Suggestions] Generation failed: ${err}\n`); } catch { /* stderr must not throw */ }
     } finally {
       this.generating = false;
     }
