@@ -226,8 +226,12 @@ export async function spawnP2PSubAgent(
       // agent's stderr emits binary garbage without newlines (e.g. crashing
       // native addon, verbose DHT debug output).
       const stderrParser = new LineParser({
-        onLine: (line) => log('debug', `[p2p] ${line}`),
-        onOverflow: (bytes) => log('warn', `[p2p] stderr buffer overflow (${bytes} bytes) — discarding to prevent heap growth`),
+        // Wrapped in try/catch: log() (pino) can throw synchronously under I/O
+        // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes
+        // the LineParser's internal callback invocation and surfaces as an
+        // uncaughtException, crashing the daemon.
+        onLine: (line) => { try { log('debug', `[p2p] ${line}`); } catch { /* logger must not throw */ } },
+        onOverflow: (bytes) => { try { log('warn', `[p2p] stderr buffer overflow (${bytes} bytes) — discarding to prevent heap growth`); } catch { /* logger must not throw */ } },
       });
       child.stderr.setEncoding('utf-8');
       child.stderr.on('data', (chunk: string) => stderrParser.write(chunk));
@@ -235,10 +239,14 @@ export async function spawnP2PSubAgent(
       // NDJSON reader for agent stdout
       const stdoutParser = new NdjsonParser<AgentToDaemon>({
         onMessage: (msg) => handleAgentMessage(msg, handlerCtx),
-        onParseError: (line) => log('warn', `[p2p] Malformed agent message: ${line.slice(0, 120)}`),
+        // Wrapped in try/catch: log() can throw under I/O pressure — same
+        // rationale as stderrParser callbacks above.
+        onParseError: (line) => { try { log('warn', `[p2p] Malformed agent message: ${line.slice(0, 120)}`); } catch { /* logger must not throw */ } },
         onHandlerError: (err) => {
-          const errStr = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
-          log('error', `[p2p] Agent message handler threw: ${errStr}`);
+          try {
+            const errStr = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
+            log('error', `[p2p] Agent message handler threw: ${errStr}`);
+          } catch { /* logger must not throw */ }
         },
       });
 
