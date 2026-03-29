@@ -257,7 +257,12 @@ export class MemoryExtractor {
     // stored, which is better than silently doing nothing forever.
     const cache = await withTimeout(loadDedupCache(), DEDUP_CACHE_IO_TIMEOUT_MS, 'dedup-cache-load')
       .catch((): DedupCache => {
-        logger.warn('[MemoryExtractor] Dedup cache load timed out — proceeding without deduplication');
+        // Nested try/catch: logger.warn() inside a .catch() callback can itself
+        // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+        // rejection.  Without the guard, the throw aborts extractAndStore entirely
+        // instead of falling back to an empty cache and continuing — turning a
+        // non-critical logging failure into a full extraction abort.
+        try { logger.warn('[MemoryExtractor] Dedup cache load timed out — proceeding without deduplication'); } catch { /* logger must not throw */ }
         return {};
       });
     const extracted: ExtractedFact[] = rawFacts.map(content => ({
@@ -292,7 +297,10 @@ export class MemoryExtractor {
       // warning and continue rather than accumulating a stuck Promise.
       await withTimeout(saveDedupCache(cache), DEDUP_CACHE_IO_TIMEOUT_MS, 'dedup-cache-save')
         .catch((err: unknown) => {
-          logger.warn(`[MemoryExtractor] Dedup cache save timed out or failed: ${getErrorMessage(err)}`);
+          // Nested try/catch: logger.warn() inside a .catch() callback can itself
+          // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+          // rejection that counts toward the daemon's 10-rejection exit threshold.
+          try { logger.warn(`[MemoryExtractor] Dedup cache save timed out or failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
         });
       logger.info(`[MemoryExtractor] Stored ${stored} new fact(s) from conv ${conversationId.substring(0, 8)} (${skipped} duplicate(s) skipped)`);
     }
