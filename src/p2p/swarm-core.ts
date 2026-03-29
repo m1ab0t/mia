@@ -1513,13 +1513,34 @@ export async function joinP2PSwarm(
       stabilityTimerByConn.set(conn, clientStabilityTimer);
 
       conn.on('close', () => {
-        teardownConnection(conn, remoteKey, clientStabilityTimer);
-        logger.debug(`[P2P] Disconnected from host. Remaining peers: ${connections.size}`);
+        // Wrapped in try/catch: mirrors the guard used by the equivalent handler
+        // in createP2PSwarm.  logger.debug() can throw (pino transport failure,
+        // EPIPE on broken IPC pipe) — an unguarded throw here would crash the
+        // P2P agent via uncaughtException on every host disconnect, causing
+        // repeated connectivity loss during the auto-restart cycle.
+        try {
+          if (teardownConnection(conn, remoteKey, clientStabilityTimer)) {
+            logger.debug(`[P2P] Disconnected from host. Remaining peers: ${connections.size}`);
+          }
+        } catch {
+          // Must never crash the P2P agent — teardown runs synchronously before
+          // any throw can occur, so connection state is already cleaned up.
+        }
       });
 
       conn.on('error', (err: Error) => {
-        logger.error({ err }, '[P2P] Connection error');
-        teardownConnection(conn, remoteKey, clientStabilityTimer);
+        // Wrapped in try/catch: same rationale as conn.on('close') above.
+        // 'error' fires frequently on flaky mobile networks (ECONNRESET,
+        // ETIMEDOUT, EPIPE) — an unguarded throw would crash the P2P agent
+        // on every such event, not just on clean disconnects.
+        try {
+          if (teardownConnection(conn, remoteKey, clientStabilityTimer)) {
+            logger.error({ err }, '[P2P] Connection error');
+          }
+        } catch {
+          // Must never crash the P2P agent — teardown runs synchronously before
+          // any throw can occur, so connection state is already cleaned up.
+        }
       });
 
       // Start keepalive immediately so zombie connections are detected even if
