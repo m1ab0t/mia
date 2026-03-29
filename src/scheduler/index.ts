@@ -412,9 +412,12 @@ export class Scheduler {
         `runNow task "${task.name}" (${taskId})`,
       );
       // Stats-only save: non-critical — log but don't fail the run
-      await this.saveTasks().catch(err =>
-        logger.error({ err, taskId }, 'Failed to persist task stats after runNow'),
-      );
+      await this.saveTasks().catch(err => {
+        // Nested try/catch: logger.error() inside a .catch() callback can itself
+        // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+        // rejection that counts toward the daemon's 10-rejection exit threshold.
+        try { logger.error({ err, taskId }, 'Failed to persist task stats after runNow'); } catch { /* logger must not throw */ }
+      });
       return true;
     } catch (error) {
       logger.error({ err: error, taskId }, 'Failed to run task');
@@ -490,9 +493,12 @@ export class Scheduler {
             `scheduled task "${task.name}" (${task.id})`,
           );
           // Stats-only save: non-critical — log but let the cron job keep running
-          await this.saveTasks().catch(err =>
-            logger.error({ err, taskId: task.id, taskName: task.name }, 'Failed to persist task stats after scheduled run'),
-          );
+          await this.saveTasks().catch(err => {
+            // Nested try/catch: logger.error() inside a .catch() callback can itself
+            // throw (pino EPIPE under I/O pressure), escaping as a new unhandled
+            // rejection that counts toward the daemon's 10-rejection exit threshold.
+            try { logger.error({ err, taskId: task.id, taskName: task.name }, 'Failed to persist task stats after scheduled run'); } catch { /* logger must not throw */ }
+          });
         } catch (error) {
           logger.error({ err: error, taskId: task.id, taskName: task.name }, 'Scheduled task failed');
         } finally {
