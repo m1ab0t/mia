@@ -993,8 +993,14 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
       }
     });
     // Prevent unhandled stream errors from crashing the daemon.
+    // Nested try/catch: logger.warn() inside a stream error handler can itself
+    // throw (e.g. ERR_STREAM_DESTROYED when stderr is closed under I/O pressure).
+    // Without the guard, that secondary throw escapes as an uncaughtException,
+    // triggering process.exit(1) and severing all P2P connectivity.
     child.stdout!.on('error', (err) => {
-      logger.warn({ taskId, err: getErrorMessage(err) }, '[BaseSpawnPlugin] stdout stream error');
+      try {
+        logger.warn({ taskId, err: getErrorMessage(err) }, '[BaseSpawnPlugin] stdout stream error');
+      } catch { /* logger must never crash the daemon */ }
     });
   }
 
@@ -1015,8 +1021,14 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
     const MAX_STDERR_LINES = 100;
 
     // Prevent unhandled stream errors from crashing the daemon.
+    // Nested try/catch: logger.warn() inside a stream error handler can itself
+    // throw (e.g. ERR_STREAM_DESTROYED when stderr is closed under I/O pressure).
+    // Without the guard, that secondary throw escapes as an uncaughtException,
+    // triggering process.exit(1) and severing all P2P connectivity.
     child.stderr!.on('error', (err) => {
-      logger.warn({ taskId, err: getErrorMessage(err) }, '[BaseSpawnPlugin] stderr stream error');
+      try {
+        logger.warn({ taskId, err: getErrorMessage(err) }, '[BaseSpawnPlugin] stderr stream error');
+      } catch { /* logger must never crash the daemon */ }
     });
 
     child.stderr!.on('data', (chunk: Buffer) => {
