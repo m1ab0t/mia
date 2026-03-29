@@ -1248,7 +1248,7 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       // stale connection, never nuke connections from other peers.
       if (remoteKey && connections.has(remoteKey)) {
         const old = connections.get(remoteKey)!;
-        logger.debug(`[P2P] Replacing stale connection from ${shortKey}`);
+        try { logger.debug(`[P2P] Replacing stale connection from ${shortKey}`); } catch { /* logger must not throw */ }
         forceDropConnection(old, remoteKey, 'publicKey-replaced');
       }
 
@@ -1258,18 +1258,27 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       registerPeerQueue(connKey, conn);
       connKeyByConn.set(conn, connKey);
       if (!remoteKey) enforceAnonCap();
-      logger.debug(`[P2P] Peer connected (${shortKey})! Total peers: ${connections.size}`);
-      peerStatusCallback?.('connected', connections.size);
+      // Wrapped in try/catch: logger.debug() can throw (pino transport failure,
+      // EPIPE on broken IPC pipe) and peerStatusCallback() calls ipc.send() →
+      // process.stdout.write() which can throw ERR_STREAM_DESTROYED when the
+      // daemon closes the pipe during a restart.  An unguarded throw here
+      // would crash the P2P agent via uncaughtException on every peer
+      // connection — high-frequency on mobile — causing repeated connectivity
+      // loss.  Mirrors the guard added to conn.on('close'/'error') in #47.
+      try { logger.debug(`[P2P] Peer connected (${shortKey})! Total peers: ${connections.size}`); } catch { /* logger must not throw */ }
+      try { peerStatusCallback?.('connected', connections.size); } catch { /* peerStatusCallback must not crash the connection handler */ }
 
       // Exponential backoff: if this peer recently disconnected, delay the
       // initial sync to avoid hammering on flaky connections.
       const reconnectDelay = getReconnectDelay(connKey);
       const syncDelay = 500 + reconnectDelay;
       if (reconnectDelay > 0) {
-        logger.info(
-          { key: shortKey, delayMs: Math.round(reconnectDelay) },
-          '[P2P] Applying reconnect backoff before initial sync',
-        );
+        try {
+          logger.info(
+            { key: shortKey, delayMs: Math.round(reconnectDelay) },
+            '[P2P] Applying reconnect backoff before initial sync',
+          );
+        } catch { /* logger must not throw */ }
       }
 
       // Stability timer — reset backoff counter once the connection has been
@@ -1472,7 +1481,11 @@ export async function joinP2PSwarm(
       registerPeerQueue(remoteKey, conn);
       connKeyByConn.set(conn, remoteKey);
       if (!info.publicKey) enforceAnonCap();
-      logger.debug(`[P2P] Connected to host! Total peers: ${connections.size}`);
+      // Wrapped in try/catch: logger.debug() can throw (pino EPIPE on a broken
+      // IPC pipe) and would propagate as an uncaughtException from the
+      // synchronous swarm.on('connection') callback, crashing the P2P agent.
+      // Mirrors the guard added to conn.on('close'/'error') in #47.
+      try { logger.debug(`[P2P] Connected to host! Total peers: ${connections.size}`); } catch { /* logger must not throw */ }
 
       conn.on('data', async (data: Buffer) => {
         try {
