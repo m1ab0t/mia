@@ -193,7 +193,12 @@ export async function routeMessage(
             sendP2PResponseForConversation(result, effectiveConvId)
           },
           onError: (error, taskId) => {
-            logger('error', `Plugin dispatch error: ${error.message}`)
+            // Wrapped in try/catch: logger() (pino) can throw synchronously under
+            // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+            // escapes the onError callback and surfaces in _guardedHandler's catch
+            // block — silently swallowing the error without sending plugin_error to
+            // the mobile client, leaving the UI hung with no indication of failure.
+            try { logger('error', `Plugin dispatch error: ${error.message}`) } catch { /* logger must not throw */ }
             if (error instanceof PluginError) {
               sendP2PPluginError(
                 error.code,
