@@ -576,6 +576,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[P2P Agent] Fatal: ${err}\n`);
+  // Nested try/catch: process.stderr.write() can throw synchronously under
+  // I/O pressure (EPIPE, ERR_STREAM_DESTROYED, ERR_STREAM_WRITE_AFTER_END).
+  // An unguarded throw here would escape the .catch() callback as a new
+  // unhandled rejection — preventing process.exit(1) from being called and
+  // leaving the P2P agent as a zombie (alive but broken) with no clean exit
+  // event for the daemon's auto-restart logic to trigger.
+  try { process.stderr.write(`[P2P Agent] Fatal: ${err}\n`); } catch { /* stderr must not throw */ }
   process.exit(1);
 });
