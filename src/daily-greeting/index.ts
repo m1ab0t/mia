@@ -110,7 +110,11 @@ async function saveCache(cache: DailyGreetingCache): Promise<void> {
       'daily-greeting-save',
     );
   } catch (err) {
-    process.stderr.write(`[DailyGreeting] Save failed: ${err}\n`);
+    // Nested try/catch: process.stderr.write() can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+    // would escape the catch block as a new unhandled rejection, counting
+    // toward the daemon's 10-rejection exit threshold.
+    try { process.stderr.write(`[DailyGreeting] Save failed: ${err}\n`); } catch { /* stderr must not throw */ }
   }
 }
 
@@ -209,7 +213,11 @@ Respond with ONLY the sentence — no quotes, no explanation.`;
 
       return (await withTimeout(loadCache(), LOAD_IO_TIMEOUT_MS, 'daily-greeting-load-cache-fallback').catch(() => null))?.message ?? '';
     } catch (err) {
-      process.stderr.write(`[DailyGreeting] Generation failed: ${err}\n`);
+      // Nested try/catch: process.stderr.write() can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // would escape the catch block as a new unhandled rejection, counting
+      // toward the daemon's 10-rejection exit threshold.
+      try { process.stderr.write(`[DailyGreeting] Generation failed: ${err}\n`); } catch { /* stderr must not throw */ }
       return (await withTimeout(loadCache(), LOAD_IO_TIMEOUT_MS, 'daily-greeting-load-cache-catch').catch(() => null))?.message ?? '';
     } finally {
       this.generating = false;
