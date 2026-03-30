@@ -101,17 +101,31 @@ export async function spawnP2PSubAgent(
       if (reconnectReadyTimer) clearTimeout(reconnectReadyTimer);
       const deadlineMs = rm.reconnectReadyTimeoutMs;
       reconnectReadyTimer = setTimeout(() => {
-        reconnectReadyTimer = null;
-        log(
-          'error',
-          `P2P agent reconnect timed out after ${deadlineMs / 1000}s — killing hung child and scheduling restart`,
-        );
-        if (currentChild && !currentChild.killed) {
+        // Wrapped in try/catch: this runs inside a raw setTimeout callback.
+        // A synchronous throw from log() (e.g. pino EPIPE under I/O pressure)
+        // would propagate as an uncaughtException and crash the daemon —
+        // exactly when it's trying to recover from a hung P2P agent restart.
+        // The critical kill() call must run regardless of whether logging succeeds,
+        // so we guard both independently with nested try/catch.
+        try {
+          reconnectReadyTimer = null;
           try {
-            currentChild.kill('SIGKILL');
-          } catch {
-            // Best-effort kill; exit event will still fire.
+            log(
+              'error',
+              `P2P agent reconnect timed out after ${deadlineMs / 1000}s — killing hung child and scheduling restart`,
+            );
+          } catch { /* logger must never prevent the kill */ }
+          if (currentChild && !currentChild.killed) {
+            try {
+              currentChild.kill('SIGKILL');
+            } catch {
+              // Best-effort kill; exit event will still fire.
+            }
           }
+        } catch {
+          // The reconnect watchdog must never crash the daemon — swallow and
+          // continue.  The P2P agent may remain hung but the daemon survives
+          // to serve cached responses and will attempt another restart cycle.
         }
       }, deadlineMs);
       if (reconnectReadyTimer && typeof reconnectReadyTimer === 'object' && 'unref' in reconnectReadyTimer) {
