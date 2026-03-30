@@ -1579,10 +1579,17 @@ async function handleConnMessage(
         await (handler as ControlHandler)(conn, parsed, ctx);
       } catch (err: unknown) {
         const errMsg = getErrorMessage(err);
-        logger.error(
-          { err, messageType: parsed.type, payload: message.substring(0, 200) },
-          `[P2P] Control handler '${parsed.type}' threw — connection preserved`,
-        );
+        // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+        // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+        // skip the writeToConn() error response — leaving the mobile client hanging
+        // with no indication that the control handler failed.  Guarding the log
+        // ensures the error response is always sent regardless of logger health.
+        try {
+          logger.error(
+            { err, messageType: parsed.type, payload: message.substring(0, 200) },
+            `[P2P] Control handler '${parsed.type}' threw — connection preserved`,
+          );
+        } catch { /* logger must not prevent error response */ }
         writeToConn(conn, b4a.from(
           JSON.stringify({ type: 'error', message: `Control handler '${parsed.type}' failed: ${errMsg}` }) + '\n',
         ));
