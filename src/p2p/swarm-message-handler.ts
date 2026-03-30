@@ -1424,7 +1424,13 @@ export function createConnectionDataHandler(
     try {
       connDataBuffer += b4a.toString(data);
       if (Buffer.byteLength(connDataBuffer, 'utf8') > MAX_CONN_BUFFER_BYTES) {
-        logger.warn(`[P2P] Closing connection: inbound buffer exceeded ${MAX_CONN_BUFFER_BYTES} bytes`);
+        // Nested try/catch: logger.warn() (pino) can throw synchronously under
+        // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+        // skips connDataBuffer = '' and conn.destroy(), leaving the buffer
+        // unbounded and the connection alive — the next message will exceed the
+        // limit again, throw again, and so on forever (buffer grows without bound,
+        // FD never released).  Guarding ensures the critical cleanup always runs.
+        try { logger.warn(`[P2P] Closing connection: inbound buffer exceeded ${MAX_CONN_BUFFER_BYTES} bytes`); } catch { /* logger must not block destroy */ }
         connDataBuffer = '';
         conn.destroy();
         return;
@@ -1487,7 +1493,12 @@ async function handleConnMessage(
   // ── 1b. Per-peer rate limit ──────────────────────────────────────────
   // Pings/pongs are exempt (above). Everything else costs one token.
   if (rateBucket && !rateBucket.consume()) {
-    logger.warn(`[P2P] Rate limited peer — dropping message: ${message.substring(0, 80)}`);
+    // Nested try/catch: logger.warn() (pino) can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+    // skips the writeToConn() and return, allowing the rate-limited message
+    // to bypass the rate check and continue to handleConnMessage — a rogue
+    // peer can then saturate the daemon despite the rate limit.
+    try { logger.warn(`[P2P] Rate limited peer — dropping message: ${message.substring(0, 80)}`); } catch { /* logger must not bypass rate limit */ }
     writeToConn(conn, b4a.from(
       JSON.stringify({ type: 'error', message: 'Rate limited — slow down' }) + '\n',
     ));
