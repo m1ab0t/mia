@@ -690,10 +690,22 @@ async function handleRestartRequest(ctx: MessageHandlerContext): Promise<void> {
     // signal never reaches the daemon, the daemon keeps running, and the
     // mobile client is stuck showing "restarting" with no recovery path.
     await withTimeout(writeFile(signalFile, String(Date.now()), 'utf-8'), 5_000, 'restart-signal-write');
-    logger.debug('[P2P] Peers disconnected, restart signal written, signalling daemon...');
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // escape the try block and be caught by the catch below — but by then
+    // process.stdout.write() (the IPC restart signal) is permanently skipped.
+    // The daemon never receives control_restart, and the mobile client is stuck
+    // showing "restarting" with no recovery path.  Guarding the log ensures the
+    // critical IPC write always runs regardless of logger health.
+    try { logger.debug('[P2P] Peers disconnected, restart signal written, signalling daemon...'); } catch { /* logger must not skip restart IPC */ }
     process.stdout.write(JSON.stringify({ type: 'control_restart' }) + '\n');
   } catch (err) {
-    logger.error({ err }, '[P2P] Restart request failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would skip
+    // sendToAll() — leaving the mobile client with no error feedback and hanging
+    // on the restart screen indefinitely.  Guarding the log ensures the error
+    // notification always reaches the mobile regardless of logger health.
+    try { logger.error({ err }, '[P2P] Restart request failed'); } catch { /* logger must not skip error notification */ }
     sendToAll({ type: 'error', message: 'Server restart failed' });
   }
 }
@@ -705,10 +717,18 @@ async function handleNewConversation(_conn: Duplex, ctx: MessageHandlerContext):
     if (cb) cb();
     ctx.setCurrentConversationId(null);
     ctx.setCurrentAssistantText('');
-    logger.debug('[P2P] Cleared conversation state - new conversation will be created on first message');
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip broadcastHistoryReset() — mobile UI would show stale conversation
+    // history instead of the cleared state, confusing the user.  Guarding the
+    // log ensures the broadcast always runs regardless of logger health.
+    try { logger.debug('[P2P] Cleared conversation state - new conversation will be created on first message'); } catch { /* logger must not skip broadcast */ }
     await broadcastHistoryReset(ctx);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] New conversation failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure, and an unguarded throw in a catch block escapes as a new
+    // unhandled rejection counted toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] New conversation failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -765,7 +785,12 @@ async function handleDeleteConversation(
     // generous for a single conversation on any healthy local store.
     await withTimeout(deleteConversation(convId), 10_000, 'handleDeleteConversation');
     ctx.evictFirstUserMessages([convId]);
-    logger.debug(`[P2P] Deleted conversation ${convId}`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip the broadcastHistoryReset()/broadcastConversationList() calls below —
+    // mobile UI would show the deleted conversation as still present.  Guarding
+    // the log ensures the critical broadcast always runs regardless of logger health.
+    try { logger.debug(`[P2P] Deleted conversation ${convId}`); } catch { /* logger must not skip broadcast */ }
     if (ctx.getCurrentConversationId() === convId) {
       ctx.setCurrentConversationId(null);
       ctx.setCurrentAssistantText('');
@@ -774,7 +799,10 @@ async function handleDeleteConversation(
       await broadcastConversationList(ctx);
     }
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Delete conversation failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure, and an unguarded throw in a catch block escapes as a new
+    // unhandled rejection counted toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Delete conversation failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -791,13 +819,21 @@ async function handleDeleteAllConversations(
     // would freeze the connection handler until the OS times out the I/O.
     await withTimeout(deleteAllConversations(), 30_000, 'handleDeleteAllConversations');
     ctx.evictFirstUserMessages();
-    logger.debug('[P2P] Deleted all conversations');
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip the state-reset and broadcastHistoryReset() calls below — mobile UI
+    // would show stale (now-deleted) conversations instead of the empty state.
+    // Guarding the log ensures the critical state mutations always run.
+    try { logger.debug('[P2P] Deleted all conversations'); } catch { /* logger must not skip state reset */ }
     ctx.setCurrentConversationId(null);
     ctx.setCurrentAssistantText('');
-    logger.debug('[P2P] Reset to draft mode after delete-all');
+    try { logger.debug('[P2P] Reset to draft mode after delete-all'); } catch { /* logger must not skip broadcast */ }
     await broadcastHistoryReset(ctx);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Delete all conversations failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure, and an unguarded throw in a catch block escapes as a new
+    // unhandled rejection counted toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Delete all conversations failed'); } catch { /* logger must not throw */ }
   }
 }
 
