@@ -227,7 +227,10 @@ export async function sendDailyGreetingTo(conn: Duplex, ctx: MessageHandlerConte
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'daily_greeting', message }) + '\n'));
     }
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Daily greeting failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Daily greeting failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -248,7 +251,11 @@ export async function sendSuggestionsTo(
     const greetings = getSuggestionsService().getGreetings();
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'suggestions', suggestions, greetings }) + '\n'));
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Suggestions action failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip the writeToConn() fallback — leaving the mobile client hanging with
+    // no suggestions response.  Guarding the log ensures the fallback always fires.
+    try { logger.error({ err }, '[P2P] Suggestions action failed'); } catch { /* logger must not throw */ }
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'suggestions', suggestions: [], greetings: [] }) + '\n'));
   }
 }
@@ -294,7 +301,11 @@ export async function sendSuggestionsFullTo(conn: Duplex): Promise<void> {
       type: 'suggestions_full', active, dismissed, completed,
     }) + '\n'));
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Suggestions full store read failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip the writeToConn() fallback — leaving the mobile client with no
+    // suggestions_full response.  Guarding the log ensures the fallback always fires.
+    try { logger.error({ err }, '[P2P] Suggestions full store read failed'); } catch { /* logger must not throw */ }
     writeToConn(conn, b4a.from(JSON.stringify({
       type: 'suggestions_full', active: [], dismissed: [], completed: [],
     }) + '\n'));
@@ -315,7 +326,11 @@ export async function sendSchedulerTasksTo(
     const tasks = await cb(params);
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'scheduler_tasks', tasks }) + '\n'));
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Scheduler action failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip the writeToConn() fallback — leaving the mobile client with no
+    // scheduler_tasks response.  Guarding the log ensures the fallback always fires.
+    try { logger.error({ err }, '[P2P] Scheduler action failed'); } catch { /* logger must not throw */ }
     writeToConn(conn, b4a.from(JSON.stringify({ type: 'scheduler_tasks', tasks: [] }) + '\n'));
   }
 }
@@ -329,7 +344,10 @@ export async function sendPluginsListTo(conn: Duplex, ctx: MessageHandlerContext
     writeToConn(conn, b4a.from(data));
     logger.debug(`[P2P] Sent ${info.plugins.length} plugins to peer (active: ${info.activePlugin})`);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Plugin list failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Plugin list failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -349,7 +367,10 @@ export async function sendConversationListTo(conn: Duplex, ctx: MessageHandlerCo
     writeToConn(conn, b4a.from(data));
     logger.debug(`[P2P] Sent ${conversations.length} conversations to peer`);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Conversations list failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Conversations list failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -584,7 +605,10 @@ export async function replayHistory(conn: Duplex, ctx: MessageHandlerContext): P
     writeToConn(conn, b4a.from(data));
     logger.debug(`[P2P] Replayed ${messages.length} history messages (${timeline.length} timeline entries) to peer`);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] History replay failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] History replay failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -620,7 +644,10 @@ async function handleHistoryRequest(
     writeToConn(conn, b4a.from(data));
     logger.debug(`[P2P] Sent ${result.messages.length} older messages (${timeline.length} entries, hasMore: ${result.hasMore})`);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] History request failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] History request failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -649,7 +676,11 @@ async function handleSearchRequest(
     writeToConn(conn, b4a.from(data));
     logger.debug(`[P2P] Search "${query}" → ${results.length} results`);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Search request failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip the writeToConn() fallback — leaving the mobile search UI spinning
+    // with no response.  Guarding the log ensures the empty result is always sent.
+    try { logger.error({ err }, '[P2P] Search request failed'); } catch { /* logger must not throw */ }
     writeToConn(
       conn,
       b4a.from(
