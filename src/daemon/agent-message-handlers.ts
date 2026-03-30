@@ -106,7 +106,13 @@ export function handlePeerConnected(
   ctx: HandlerCtx,
 ): void {
   setPeerCount(msg.peerCount);
-  ctx.log('info', `P2P peer connected (total: ${msg.peerCount})`);
+  // Wrapped in try/catch: ctx.log() (pino) can throw synchronously under I/O
+  // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+  // skip ctx.onPeerConnected() — the callbacks registered by callers to act on
+  // the first peer connection (e.g. sending queued messages, waking up the
+  // readiness promise).  Guarding the log ensures the critical callbacks always
+  // fire regardless of logger health.
+  try { ctx.log('info', `P2P peer connected (total: ${msg.peerCount})`); } catch { /* logger must not throw */ }
   ctx.onPeerConnected();
   const status = ctx.getTaskStatus();
   if (status.running) {
@@ -119,7 +125,8 @@ export function handlePeerDisconnected(
   ctx: HandlerCtx,
 ): void {
   setPeerCount(msg.peerCount);
-  ctx.log('info', `P2P peer disconnected (remaining: ${msg.peerCount})`);
+  // Wrapped in try/catch: same rationale as handlePeerConnected above.
+  try { ctx.log('info', `P2P peer disconnected (remaining: ${msg.peerCount})`); } catch { /* logger must not throw */ }
 }
 
 export function handleUserMessage(
@@ -285,12 +292,20 @@ export function handleAbortGeneration(
   _msg: Extract<AgentToDaemon, { type: 'control_abort_generation' }>,
   ctx: HandlerCtx,
 ): void {
-  ctx.log('info', 'Abort generation requested via P2P');
+  // Wrapped in try/catch: ctx.log() (pino) can throw synchronously under I/O
+  // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+  // prevent ctx.queue.abortAndDrain() from running — leaving the in-flight
+  // dispatch alive and the mobile client's cancel request silently ignored.
+  // Guarding the log ensures the abort always fires regardless of logger health.
+  try { ctx.log('info', 'Abort generation requested via P2P'); } catch { /* logger must not throw */ }
   ctx.queue.abortAndDrain();
   try {
     ctx.onAbortGeneration();
   } catch (err) {
-    ctx.log('warn', `Abort generation callback failed: ${getErrorMessage(err)}`);
+    // Nested try/catch: ctx.log() inside a catch block can itself throw under
+    // I/O pressure, escaping as a new unhandled rejection counted toward the
+    // daemon's 10-rejection exit threshold.
+    try { ctx.log('warn', `Abort generation callback failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
   }
 }
 
@@ -335,7 +350,12 @@ export function handleRestart(
   _msg: Extract<AgentToDaemon, { type: 'control_restart' }>,
   ctx: HandlerCtx,
 ): void {
-  ctx.log('info', 'Restart requested via P2P — initiating daemon restart');
+  // Wrapped in try/catch: ctx.log() (pino) can throw synchronously under I/O
+  // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+  // prevent ctx.onRestart() from running — silently dropping the mobile
+  // client's restart request.  Guarding the log ensures the restart always
+  // fires regardless of logger health.
+  try { ctx.log('info', 'Restart requested via P2P — initiating daemon restart'); } catch { /* logger must not throw */ }
   ctx.onRestart();
 }
 
