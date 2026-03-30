@@ -375,7 +375,14 @@ function handleAgentMessage(msg: AgentToDaemon, ctx: HandlerCtx): void {
   } catch (err: unknown) {
     try {
       const errMsg = getErrorMessage(err);
-      ctx.log('error', `handleAgentMessage threw for type="${msg.type}": ${errMsg}`);
+      // Nested try/catch: ctx.log() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+      // skip sendFallbackResponse() — leaving the mobile client hanging forever
+      // waiting for a reply to request-response messages (plugins_request,
+      // plugin_test, suggestions, daily_greeting, scheduler, persona_generate).
+      // Guarding the log ensures the fallback always fires regardless of
+      // logger health.
+      try { ctx.log('error', `handleAgentMessage threw for type="${msg.type}": ${errMsg}`); } catch { /* logger must not throw */ }
       sendFallbackResponse(msg, errMsg);
     } catch {
       // The error handler itself must never throw — the NDJSON parser's
