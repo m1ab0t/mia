@@ -84,6 +84,21 @@ const GIT_CONTEXT_TIMEOUT_MS = 8_000;
  */
 const WORKSPACE_SCAN_TIMEOUT_MS = 8_000;
 /**
+ * Hard timeout for the memory store search in _gatherMemoryFacts().
+ *
+ * memoryStore.search() runs a SQLite FTS5 query.  Under a locked WAL file,
+ * NFS stall, or I/O pressure, the SQLite call can hang indefinitely inside
+ * libuv's thread pool.  The existing try/catch only handles thrown errors,
+ * not hung Promises — a hung search blocks the entire prepareContext() call
+ * (and therefore every dispatch) for the duration of the stall.
+ *
+ * 5 s matches FETCH_MESSAGES_TIMEOUT_MS — generous for an in-process SQL
+ * FTS query on any healthy filesystem.  On timeout the fallback is an
+ * empty array (no memory facts injected), identical to what the method
+ * already returns on a caught exception — no behaviour regression.
+ */
+const MEMORY_SEARCH_TIMEOUT_MS = 5_000;
+/**
  * Hard timeout for each individual getRecentMessages() call in _fetchAndExpandMessages().
  *
  * getRecentMessages() opens a HypercoreDB stream (stream.find().toArray()) which
@@ -361,7 +376,22 @@ export class ContextPreparer {
     // memory facts, and conversation history so the plugin can respond
     // coherently. Memory facts are always gathered because they contain
     // personal information (name, age, preferences) relevant to any mode.
-    const memoryFacts = await this._gatherMemoryFacts(prompt, mode);
+    //
+    // Wrapped in withTimeout: _gatherMemoryFacts calls memoryStore.search()
+    // which runs a SQLite FTS5 query via libuv's thread pool.  Under a
+    // locked WAL file, NFS stall, or I/O pressure, the SQLite call can hang
+    // indefinitely — the existing try/catch in _gatherMemoryFacts only
+    // handles thrown errors, not hung Promises.  Without a timeout, a
+    // stuck DB search blocks prepareContext() on every dispatch,
+    // permanently stalling all user messages until the dispatcher-level
+    // CONTEXT_PREPARE_MS timeout fires (and leaking a thread-pool slot
+    // until then).  On timeout an empty array is returned, identical to
+    // the method's own exception-fallback — no behaviour regression.
+    const memoryFacts = await withTimeout(
+      this._gatherMemoryFacts(prompt, mode),
+      MEMORY_SEARCH_TIMEOUT_MS,
+      'memory-facts-gather',
+    ).catch((): string[] => []);
     // Wrapped in withTimeout: both methods internally call filesystem operations
     // (access, stat, readdir) that can hang indefinitely under I/O pressure
     // (NFS stall, FUSE deadlock, swap thrashing).  scanGitStateAsync begins
