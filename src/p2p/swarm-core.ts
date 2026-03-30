@@ -1092,7 +1092,10 @@ function forceDropConnection(conn: Duplex, connKey: string, reason: string): voi
   const cleaned = teardownConnection(conn, connKey, timer);
   try { conn.destroy(); } catch { /* ignore */ }
   if (cleaned) {
-    logger.debug({ key: connKey, reason }, '[P2P] Dropped connection');
+    // Guarded: logger.debug() can throw (pino EPIPE) — must not propagate
+    // out of forceDropConnection and abort the caller's loop iteration,
+    // leaving subsequent ghost connections unswept.
+    try { logger.debug({ key: connKey, reason }, '[P2P] Dropped connection'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -1107,10 +1110,13 @@ function registerPeerIdentity(
   if (existingKey && existingKey !== connKey) {
     const existingConn = connections.get(existingKey);
     if (existingConn) {
-      logger.info(
+      // Guarded: logger.info() can throw (pino EPIPE under I/O pressure).
+      // If unguarded, the throw skips forceDropConnection and leaves the
+      // stale connection alive — a second socket for the same device.
+      try { logger.info(
         { deviceId: info.deviceId, oldKey: existingKey, newKey: connKey },
         '[P2P] Replacing stale connection for deviceId',
-      );
+      ); } catch { /* logger must not prevent cleanup */ }
       forceDropConnection(existingConn, existingKey, 'deviceId-replaced');
     } else {
       deviceIdToConnKey.delete(info.deviceId);
@@ -1147,10 +1153,13 @@ function registerPeerIdentity(
     const isOldGhost = ageMs > UNIDENTIFIED_CONN_MAX_AGE_MS;
     const isPreIdentifyGhost = created < currentCreatedAt && ageMs > GHOST_GRACE_PERIOD_MS;
     if (isOldGhost || isPreIdentifyGhost) {
-      logger.info(
+      // Guarded: logger.info() can throw (pino EPIPE under I/O pressure).
+      // If unguarded, the throw skips forceDropConnection and aborts the
+      // loop — leaving remaining ghost connections alive and leaking FDs.
+      try { logger.info(
         { key, ageMs, reason: isOldGhost ? 'age-expired' : 'pre-identify' },
         '[P2P] Pruning unidentified ghost connection',
-      );
+      ); } catch { /* logger must not prevent cleanup */ }
       forceDropConnection(peer, key, 'unidentified-ghost');
     }
   }
@@ -1174,10 +1183,14 @@ function sweepGhostConnections(): void {
     if (deviceIdByConn.has(peer)) continue; // already identified
     const created = connCreatedAt.get(peer) ?? 0;
     if (now - created > UNIDENTIFIED_CONN_MAX_AGE_MS) {
-      logger.info(
+      // Guarded: logger.info() can throw (pino EPIPE under I/O pressure).
+      // If unguarded, the throw skips forceDropConnection and aborts the
+      // for-loop — leaving this and all subsequent ghost connections alive,
+      // slowly exhausting the P2P agent's FD budget.
+      try { logger.info(
         { key, ageMs: now - created },
         '[P2P] Ghost sweeper: pruning unidentified connection',
-      );
+      ); } catch { /* logger must not prevent cleanup */ }
       forceDropConnection(peer, key, 'ghost-sweep');
     }
   }
