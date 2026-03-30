@@ -1581,7 +1581,15 @@ async function handleConnMessage(
       await ctx.storeUserMessage(textMessage);
       ctx.autoNameConversation();
     } catch (persistErr: unknown) {
-      logger.warn(`[P2P] Message persistence failed (non-fatal): ${getErrorMessage(persistErr)}`);
+      // Nested try/catch: logger.warn() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // would escape the catch block and propagate through handleConnMessage,
+      // causing createConnectionDataHandler to catch it at the outer level —
+      // but by then `await aiHandler()` (the AI dispatch below) is permanently
+      // skipped.  The mobile's message is silently dropped with no AI response
+      // ever arriving, leaving the UI hung indefinitely.  Guarding the log
+      // ensures AI dispatch always runs regardless of logger health.
+      try { logger.warn(`[P2P] Message persistence failed (non-fatal): ${getErrorMessage(persistErr)}`); } catch { /* logger must not skip AI dispatch */ }
     }
     try {
       await aiHandler(textMessage, image);
