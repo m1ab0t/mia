@@ -227,7 +227,11 @@ Begin now.`;
   } catch (err: unknown) {
     // Must never reject — an unhandled rejection here would trigger the
     // daemon's rejection safety net and potentially cause an exit.
-    log('error', `Awakening error: ${getErrorMessage(err)}`);
+    // Nested try/catch: log() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+    // would escape the catch block as a new unhandled rejection, counting
+    // toward the daemon's 10-rejection exit threshold.
+    try { log('error', `Awakening error: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
   }
 }
 
@@ -280,7 +284,11 @@ Do NOT say "I'm back online" or anything robotic. Don't ask "want to continue?" 
     await handleMessage(reconnectPrompt, 'reconnect');
   } catch (err: unknown) {
     // Must never reject — same safety as triggerAwakening.
-    log('warn', `Reconnect gesture error: ${getErrorMessage(err)}`);
+    // Nested try/catch: log() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+    // would escape the catch block as a new unhandled rejection, counting
+    // toward the daemon's 10-rejection exit threshold.
+    try { log('warn', `Reconnect gesture error: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
   }
 }
 
@@ -391,7 +399,12 @@ async function main() {
         }
       }
     } catch (err: unknown) {
-      log('warn', `Codebase context unavailable: ${getErrorMessage(err)}`);
+      // Nested try/catch: log() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // would escape the catch block and propagate through main(), causing
+      // main().catch() to call process.exit(1) — crashing the daemon during
+      // startup.
+      try { log('warn', `Codebase context unavailable: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
     }
   });
 
@@ -459,7 +472,10 @@ async function main() {
       }
     }
     } catch (err: unknown) {
-      log('warn', `Memory init failed: ${getErrorMessage(err)}`);
+      // Nested try/catch: same rationale as the codebase-context catch above —
+      // an unguarded log() throw here propagates through main() and causes
+      // process.exit(1), crashing the daemon during startup.
+      try { log('warn', `Memory init failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
     }
   });
 
@@ -524,7 +540,10 @@ async function main() {
           log('info', `DailyLog: pruned ${pruned} expired file${pruned === 1 ? '' : 's'} (retention ${dailyLogRetention}d)`);
         }
       } catch (err: unknown) {
-        log('warn', `DailyLog prune failed: ${getErrorMessage(err)}`);
+        // Nested try/catch: same rationale as the codebase-context catch above —
+        // an unguarded log() throw here propagates through main() and causes
+        // process.exit(1), crashing the daemon during startup.
+        try { log('warn', `DailyLog prune failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
       }
     }
   });
@@ -549,7 +568,10 @@ async function main() {
           log('info', `ConvSummaries: pruned ${pruned} file${pruned === 1 ? '' : 's'} (retention ${convSumRetentionDays}d, max ${convSumMaxCount})`);
         }
       } catch (err: unknown) {
-        log('warn', `ConvSummaries prune failed: ${getErrorMessage(err)}`);
+        // Nested try/catch: same rationale as the codebase-context catch above —
+        // an unguarded log() throw here propagates through main() and causes
+        // process.exit(1), crashing the daemon during startup.
+        try { log('warn', `ConvSummaries prune failed: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
       }
     }
   });
@@ -631,7 +653,10 @@ async function main() {
         'context-refresh setup',
       );
     } catch (err: unknown) {
-      log('warn', `Context refresh setup failed or timed out — daemon running without context-refresh schedule: ${getErrorMessage(err)}`);
+      // Nested try/catch: same rationale as the codebase-context catch above —
+      // an unguarded log() throw here propagates through main() and causes
+      // process.exit(1), crashing the daemon during startup.
+      try { log('warn', `Context refresh setup failed or timed out — daemon running without context-refresh schedule: ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
     }
   });
 
