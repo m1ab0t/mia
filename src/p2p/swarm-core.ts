@@ -1128,10 +1128,21 @@ function registerPeerIdentity(
 
   const shortKey = connKey.slice(0, 8);
   const label = info.deviceName ?? info.deviceId.slice(0, 8);
-  logger.info(
-    { deviceId: info.deviceId, deviceName: info.deviceName, platform: info.platform, appVersion: info.appVersion, connKey: shortKey, totalPeers: connections.size },
-    `[P2P] Peer identified: "${label}" (${info.platform ?? 'unknown'} ${info.appVersion ?? ''}) key=${shortKey}`,
-  );
+  // Guarded: logger.info() can throw (pino EPIPE under I/O pressure).
+  // If unguarded, the throw skips the ghost connection prune loop below —
+  // ghost connections accumulate without bound, each holding a Duplex FD and
+  // a keepalive setInterval.  Over many mobile reconnects (wifi/cellular
+  // switching), accumulated ghosts exhaust the process FD budget, causing new
+  // peer connections to fail with EMFILE.  The throw also propagates to the
+  // client_hello handler's try/catch in handleConnMessage, sending a spurious
+  // "Control handler 'client_hello' failed" error to the mobile client — even
+  // though the peer identity maps were already successfully updated.
+  try {
+    logger.info(
+      { deviceId: info.deviceId, deviceName: info.deviceName, platform: info.platform, appVersion: info.appVersion, connKey: shortKey, totalPeers: connections.size },
+      `[P2P] Peer identified: "${label}" (${info.platform ?? 'unknown'} ${info.appVersion ?? ''}) key=${shortKey}`,
+    );
+  } catch { /* logger must not skip the ghost connection prune loop below */ }
 
   // Prune unidentified ghost connections.  Two cases:
   //
