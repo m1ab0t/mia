@@ -520,14 +520,27 @@ export class OpenCodePlugin implements CodingPlugin {
         const health = (await res.json()) as { healthy?: boolean };
         if (health?.healthy) {
           const client = createOpencodeClient({ baseUrl: existingUrl, headers: authHeaders });
-          logger.info(`[opencode] Connected to existing server at ${existingUrl}`);
+          // Nested try/catch: logger.info() inside a try block can itself throw
+          // (e.g. pino EPIPE under I/O pressure).  Without this guard the throw
+          // escapes the inner try block into the outer catch (line ~555), which
+          // resets this.client/this.server and throws "Failed to start opencode
+          // server" — causing an unnecessary dispatch failure when the connection
+          // actually succeeded.  The guard ensures the critical state assignments
+          // that follow always run regardless of whether logging succeeds.
+          try { logger.info(`[opencode] Connected to existing server at ${existingUrl}`); } catch { /* logger must not prevent state assignment */ }
           this.client = client;
           this.server = null; // We didn't start it, so nothing to close
           this.serverPort = existingPort;
           return;
         }
       } catch {
-        logger.info(`[opencode] No existing server at ${existingUrl}, starting a new one...`);
+        // Nested try/catch: logger.info() inside a catch block can itself throw
+        // (e.g. pino EPIPE under I/O pressure).  Without this guard the throw
+        // escapes this catch block into the outer catch (line ~555), which resets
+        // this.client/this.server/this._serverStarting and throws "Failed to start
+        // opencode server" — preventing the fallback new-server path from running
+        // when in fact the only failure was a logger call.
+        try { logger.info(`[opencode] No existing server at ${existingUrl}, starting a new one...`); } catch { /* logger must not prevent fallback */ }
       }
 
       // Fall back to starting a new server on a random port
