@@ -1388,7 +1388,18 @@ export async function createP2PSwarm(): Promise<{ success: boolean; key?: string
       // Timeout is non-fatal — the swarm is already listening and peers can
       // still connect via the DHT even if the initial flush didn't complete.
       // Log and continue rather than aborting the entire P2P setup.
-      logger.warn({ err: getErrorMessage(err) }, '[P2P] discovery.flushed() timed out — swarm is still active, continuing');
+      //
+      // Guarded: logger.warn() can throw (pino EPIPE, ERR_STREAM_DESTROYED
+      // under I/O pressure).  If unguarded, the throw escapes this catch block
+      // and is caught by the outer catch (error: unknown), making
+      // createP2PSwarm() return { success: false } — causing the P2P agent to
+      // call process.exit(1) even though the swarm is running successfully.
+      // This would trigger an unnecessary auto-restart and a brief loss of
+      // mobile connectivity whenever pino is unhealthy during a DHT flush
+      // timeout.
+      try {
+        logger.warn({ err: getErrorMessage(err) }, '[P2P] discovery.flushed() timed out — swarm is still active, continuing');
+      } catch { /* logger must not abort P2P setup */ }
     }
 
     const keyHex = b4a.toString(topicKey, 'hex');
@@ -1585,7 +1596,16 @@ export async function joinP2PSwarm(
     } catch (err: unknown) {
       // Timeout is non-fatal — the swarm is already searching for peers and
       // connections can still arrive after the flush timeout.
-      logger.warn({ err: getErrorMessage(err) }, '[P2P] discovery.flushed() timed out — swarm is still active, continuing');
+      //
+      // Guarded: logger.warn() can throw (pino EPIPE, ERR_STREAM_DESTROYED
+      // under I/O pressure).  If unguarded, the throw escapes this catch block
+      // and is caught by the outer catch (error: unknown), making
+      // createP2PSwarmForClient() return { success: false } — causing the P2P
+      // agent to call process.exit(1) even though the swarm is running.
+      // Mirrors the same guard applied to createP2PSwarm() (server mode).
+      try {
+        logger.warn({ err: getErrorMessage(err) }, '[P2P] discovery.flushed() timed out — swarm is still active, continuing');
+      } catch { /* logger must not abort P2P setup */ }
     }
 
     return { success: true };
