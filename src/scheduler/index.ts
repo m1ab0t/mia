@@ -453,20 +453,40 @@ export class Scheduler {
 
           // Force-abort when skips exceed threshold — the task is stuck.
           if (task.consecutiveSkips >= STUCK_TASK_SKIP_THRESHOLD) {
-            logger.error(
-              { taskId: task.id, taskName: task.name, consecutiveSkips: task.consecutiveSkips },
-              `Stuck task detected — force-aborting "${task.name}" after ${task.consecutiveSkips} consecutive skips`,
-            );
-
-            // Remove from runningTasks so the next cron tick can retry.
+            // State cleanup happens BEFORE logging so that a logger throw
+            // (pino EPIPE under I/O pressure) never prevents the task from
+            // being unblocked.  Without this ordering, an unguarded logger
+            // call that throws causes the outer catch to swallow the error
+            // while skipping runningTasks.delete() — leaving the task in
+            // runningTasks permanently.  Every subsequent cron tick would
+            // increment consecutiveSkips, hit the same logger throw, and
+            // be caught, so the task could never be force-aborted: the
+            // scheduler would be permanently stuck on a single task.
+            const skipsAtAbort = task.consecutiveSkips;
             this.runningTasks.delete(task.id);
             task.consecutiveSkips = 0;
+
+            // Log after cleanup so a pino throw doesn't prevent unblocking.
+            // Nested try/catch: logger.error() inside a cron callback can
+            // itself throw (pino EPIPE, ERR_STREAM_DESTROYED under I/O
+            // pressure).  An unguarded throw here escapes the outer try block
+            // and is caught by the cron-callback outer catch — but since state
+            // is already cleaned up, the stuck task is always unblocked
+            // regardless of whether logging succeeds.
+            try {
+              logger.error(
+                { taskId: task.id, taskName: task.name, consecutiveSkips: skipsAtAbort },
+                `Stuck task detected — force-aborting "${task.name}" after ${skipsAtAbort} consecutive skips`,
+              );
+            } catch { /* logger must not prevent task unblocking */ }
 
             // Notify the daemon to kill the underlying dispatch.
             try {
               this.stuckTaskHandler?.(task.id);
             } catch (err: unknown) {
-              logger.warn({ err, taskId: task.id }, 'stuckTaskHandler threw — task unblocked anyway');
+              // Nested try/catch: logger.warn() inside a catch block can itself
+              // throw under I/O pressure, escaping as an unhandled rejection.
+              try { logger.warn({ err, taskId: task.id }, 'stuckTaskHandler threw — task unblocked anyway'); } catch { /* logger must not throw */ }
             }
             return;
           }
