@@ -795,7 +795,10 @@ async function handleRenameConversation(
     logger.debug(`[P2P] Renamed conversation ${convId} to "${sanitized}"`);
     await broadcastConversationList(ctx);
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Rename conversation failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Rename conversation failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -895,7 +898,10 @@ async function handleDeleteMultipleConversations(
       await broadcastConversationList(ctx);
     }
   } catch (err: unknown) {
-    logger.error({ err }, '[P2P] Delete multiple conversations failed');
+    // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+    // that counts toward the P2P agent's 10-rejection exit threshold.
+    try { logger.error({ err }, '[P2P] Delete multiple conversations failed'); } catch { /* logger must not throw */ }
   }
 }
 
@@ -1016,7 +1022,12 @@ const controlHandlers = {
         logger.debug(`[P2P] Plugin switch to '${msg.name}': ${result.success ? 'ok' : result.error}`);
       }
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Plugin switch failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Plugin switch failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1029,7 +1040,10 @@ const controlHandlers = {
         logger.debug(`[P2P] Mode switch to '${msg.mode}': ok`);
       }
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Mode switch failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.
+      try { logger.error({ err }, '[P2P] Mode switch failed'); } catch { /* logger must not throw */ }
     }
   },
   plugin_test: async (conn, _msg, ctx) => {
@@ -1042,7 +1056,12 @@ const controlHandlers = {
       const result = await testCb();
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_test_result', ...result }) + '\n'));
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Plugin test failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Plugin test failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_test_result', success: false, output: '', elapsed: 0, pluginName: '', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1072,7 +1091,12 @@ const controlHandlers = {
       writeToConn(conn, b4a.from(data));
       logger.debug(`[P2P] Sent ${personas.length} personas to peer (active: ${active})`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona list failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona list failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'personas', personas: [], activePersona: 'mia', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1095,7 +1119,12 @@ const controlHandlers = {
       sendToAll({ type: 'persona_switched', activePersona: active });
       logger.debug(`[P2P] Persona switch to '${active}': ok`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona switch failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona switch failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_switched', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1120,7 +1149,12 @@ const controlHandlers = {
       sendToAll({ type: 'persona_created', persona, personas, activePersona: active });
       logger.debug(`[P2P] Persona created: '${persona.name}'`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona create failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona create failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_created', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1145,7 +1179,12 @@ const controlHandlers = {
       sendToAll({ type: 'persona_updated', persona, personas, activePersona: active });
       logger.debug(`[P2P] Persona updated: '${persona.name}'`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona update failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona update failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_updated', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1169,7 +1208,12 @@ const controlHandlers = {
       sendToAll({ type: 'persona_deleted', name: msg.name, personas, activePersona });
       logger.debug(`[P2P] Persona deleted: '${msg.name}'`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona delete failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona delete failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_deleted', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1193,7 +1237,12 @@ const controlHandlers = {
       }
       logger.debug(`[P2P] Sent persona content for '${msg.name}'`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona get failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona get failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_content', error: getErrorMessage(err) }) + '\n'));
     }
   },
@@ -1208,7 +1257,12 @@ const controlHandlers = {
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_generated', content }) + '\n'));
       logger.debug(`[P2P] Generated persona from description`);
     } catch (err: unknown) {
-      logger.error({ err }, '[P2P] Persona generate failed');
+      // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
+      // that counts toward the P2P agent's 10-rejection exit threshold.  Guarding
+      // ensures writeToConn() always runs so the mobile client receives an error
+      // response rather than hanging indefinitely with no feedback.
+      try { logger.error({ err }, '[P2P] Persona generate failed'); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_generated', error: getErrorMessage(err) }) + '\n'));
     }
   },
