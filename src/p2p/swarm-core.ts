@@ -572,7 +572,15 @@ export async function sendP2PToolCall(
     filePath?: string;
   },
 ): Promise<void> {
-  logger.debug(`[P2P] Sending tool_call: ${toolName} to ${connections.size} connections`);
+  // Guarded: logger.debug() (pino) can throw synchronously under I/O pressure
+  // (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here skips ALL critical
+  // operations that follow: flushing accumulated assistant text via persistEntry(),
+  // resetting currentAssistantText, and sendToAll() delivering the tool_call to
+  // the mobile client.  The mobile UI is left without tool-call visibility for
+  // the rest of the dispatch, and the assistant text buffer keeps growing
+  // unbounded (never cleared) — corrupting subsequent message persistence.
+  // Guarding ensures the tool_call is always delivered regardless of pino's health.
+  try { logger.debug(`[P2P] Sending tool_call: ${toolName} to ${connections.size} connections`); } catch { /* logger must not skip tool_call delivery */ }
   const toolCallId = metadata?.toolCallId || `${toolName}_${Date.now()}`;
   const now = Date.now();
   const convId = resolveConvId(conversationId);
