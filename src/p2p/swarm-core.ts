@@ -248,14 +248,25 @@ async function ensureMessageStore(): Promise<boolean> {
 
   pendingStoreInit = (async (): Promise<boolean> => {
     try {
-      logger.debug('[P2P] Attempting lazy message store initialization...');
+      // Guarded: logger.debug() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // would skip closeMessageStore/initMessageStore and fall into the catch
+      // block, where the unguarded logger.error() would throw again — causing
+      // the IIFE's Promise to reject with an unhandled rejection counted toward
+      // the P2P agent's 10-rejection exit threshold.
+      try { logger.debug('[P2P] Attempting lazy message store initialization...'); } catch { /* logger must not skip init */ }
       // closeMessageStore() calls db.close() which can hang if the DB is
       // locked, corrupted, or a compaction is stuck.  Wrap it in a timeout
       // so the entire recovery path cannot block forever.
       await withTimeout(closeMessageStore(), MESSAGE_STORE_CLOSE_TIMEOUT_MS, 'Lazy message store close');
       await withTimeout(initMessageStore(), MESSAGE_STORE_INIT_TIMEOUT_MS, 'Lazy message store init');
       messageStoreReady = true;
-      logger.debug('[P2P] Lazy message store initialization succeeded');
+      // Guarded: logger.debug() can throw under I/O pressure.  If it throws
+      // AFTER messageStoreReady = true, the catch block would run with
+      // messageStoreReady already true but the IIFE's Promise still rejected —
+      // callers awaiting pendingStoreInit would get a rejection even though the
+      // store is actually usable.  The guard prevents this inconsistency.
+      try { logger.debug('[P2P] Lazy message store initialization succeeded'); } catch { /* logger must not skip flush */ }
       // Fire-and-forget: buffered entries are historical data — the store is
       // ready for new writes immediately.  Awaiting a serial flush of up to
       // WRITE_BUFFER_MAX (500) entries would block ensureMessageStore() for up
@@ -271,7 +282,13 @@ async function ensureMessageStore(): Promise<boolean> {
       });
       return true;
     } catch (err) {
-      logger.error({ err }, '[P2P] Lazy message store init failed');
+      // Guarded: logger.error() can throw under I/O pressure (EPIPE,
+      // ERR_STREAM_DESTROYED).  An unguarded throw here would escape the catch
+      // block and cause the IIFE's Promise to reject — turning a recoverable
+      // store-init failure into an unhandled rejection that counts toward the
+      // P2P agent's 10-rejection exit threshold and can trigger a crash-restart
+      // loop.  Guarding ensures the IIFE always returns false cleanly.
+      try { logger.error({ err }, '[P2P] Lazy message store init failed'); } catch { /* logger must not throw */ }
       return false;
     } finally {
       pendingStoreInit = null;
