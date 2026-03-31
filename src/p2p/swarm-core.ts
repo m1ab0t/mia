@@ -285,7 +285,12 @@ async function flushWriteBuffer(): Promise<void> {
   if (writeBuffer.length === 0) return;
   const pending = writeBuffer;
   writeBuffer = [];
-  logger.debug(`[P2P] Flushing ${pending.length} buffered write(s) to message store`);
+  // Guarded: logger.debug() (pino) can throw synchronously under I/O pressure
+  // (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here skips the entire
+  // for-loop below — writeBuffer is already cleared at this point, so all
+  // pending entries are permanently lost with no error and no trace in any log.
+  // Guarding ensures the flush loop always runs regardless of pino's health.
+  try { logger.debug(`[P2P] Flushing ${pending.length} buffered write(s) to message store`); } catch { /* logger must not skip flush */ }
   for (const entry of pending) {
     await putMessage(entry).catch((err: unknown) => {
       // Nested try/catch: mirrors the guard on every other .catch() logger call
@@ -303,7 +308,13 @@ function persistEntry(entry: Omit<StoredMessage, 'id'>): void {
     if (writeBuffer.length < WRITE_BUFFER_MAX) {
       writeBuffer.push(entry);
     } else {
-      logger.warn({ conversationId: entry.conversationId }, '[P2P] Write buffer full; dropping entry for conversation');
+      // Guarded: logger.warn() (pino) can throw synchronously under I/O pressure
+      // (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes persistEntry()
+      // and surfaces in the caller (storeUserMessage / storeAssistantMessage) as an
+      // unexpected exception — the caller's own try/catch handles it, but phrasing
+      // the error as a "persistence failure" rather than a logger failure obscures the
+      // real cause.  Guarding is consistent with every other logger call in this file.
+      try { logger.warn({ conversationId: entry.conversationId }, '[P2P] Write buffer full; dropping entry for conversation'); } catch { /* logger must not throw */ }
     }
     return;
   }
@@ -398,7 +409,13 @@ export function getP2PStatus(): P2PStatus {
 
 /** Broadcast updated suggestions (and optional greeting batch) to every connected mobile peer. */
 export function broadcastSuggestions(suggestions: SuggestionInfo[], greetings: string[] = []): void {
-  logger.debug(`[P2P] Broadcasting ${suggestions.length} suggestions + ${greetings.length} greeting(s) to ${connections.size} peer(s)`);
+  // Guarded: logger.debug() (pino) can throw synchronously under I/O pressure
+  // (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here skips BOTH the
+  // suggestionsGenerating reset AND sendToAll() — the mobile client is left
+  // stuck with a "generating suggestions" spinner indefinitely, and the new
+  // suggestions are never delivered.  Guarding ensures the broadcast always
+  // completes regardless of pino's health.
+  try { logger.debug(`[P2P] Broadcasting ${suggestions.length} suggestions + ${greetings.length} greeting(s) to ${connections.size} peer(s)`); } catch { /* logger must not skip broadcast */ }
   // Generation is complete — clear the generating flag so newly connecting
   // peers don't receive a stale suggestions_generating signal.
   suggestionsGenerating = false;
