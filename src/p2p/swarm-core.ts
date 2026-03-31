@@ -1514,9 +1514,18 @@ export async function joinP2PSwarm(
 
       conn.on('data', async (data: Buffer) => {
         try {
-          logger.debug(`[P2P] Received data from ${remoteKey}: ${data.length} bytes`);
+          // Nested try/catch: logger.debug() (pino) can throw synchronously
+          // under I/O pressure (EPIPE, ERR_STREAM_DESTROYED) when the IPC
+          // pipe to the daemon is broken.  An unguarded throw here skips
+          // b4a.toString(), messageHandler(), and all message processing —
+          // silently dropping the user's message with no recovery path.
+          // The outer catch below swallows the error without logging it,
+          // so the dropped message leaves no trace in any log.  Guarding
+          // each logger call independently ensures message processing always
+          // runs regardless of pino's health.
+          try { logger.debug(`[P2P] Received data from ${remoteKey}: ${data.length} bytes`); } catch { /* logger must not skip message handling */ }
           const message = b4a.toString(data).trim();
-          logger.debug(`P2P received: ${message}`);
+          try { logger.debug(`P2P received: ${message}`); } catch { /* logger must not skip message handling */ }
 
           if (messageHandler) {
             try {
