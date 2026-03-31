@@ -528,10 +528,17 @@ export class PluginDispatcher {
         () => plugin.dispatch(prompt, context, dispatchOptions, internalCallbacks),
       );
     } catch (verifyErr: unknown) {
-      logger.warn(
-        { traceId, err: getErrorMessage(verifyErr) },
-        `[trace:${traceId}] Post-dispatch verification threw — continuing without verification: ${getErrorMessage(verifyErr)}`,
-      );
+      // Nested try/catch: logger.warn() can throw (pino EPIPE under I/O
+      // pressure).  If unguarded, the throw escapes this catch block and the
+      // finally block that calls endTrace() is still reached, but the outer
+      // _dispatchWithPlugin() rejects — causing dispatch() to treat a verifier
+      // error as a full dispatch failure rather than a non-critical annotation.
+      try {
+        logger.warn(
+          { traceId, err: getErrorMessage(verifyErr) },
+          `[trace:${traceId}] Post-dispatch verification threw — continuing without verification: ${getErrorMessage(verifyErr)}`,
+        );
+      } catch { /* logger must not prevent verification fallback */ }
     } finally {
       // End trace — then emit aggregated per-tool latency to logs so slow tools
       // are visible without opening trace files.
@@ -617,10 +624,18 @@ export class PluginDispatcher {
       // Fall back to a minimal empty context so the dispatch can still proceed.
       // The plugin will lack memory/git/workspace context but at least the user
       // gets a response instead of an infinite hang.
-      logger.warn(
-        { conversationId, err: getErrorMessage(ctxErr) },
-        `[context] Context preparation failed — proceeding with minimal context: ${getErrorMessage(ctxErr)}`,
-      );
+      //
+      // Nested try/catch: logger.warn() can throw synchronously under I/O
+      // pressure (pino EPIPE, ERR_STREAM_DESTROYED on the stderr transport).
+      // If unguarded, the throw escapes this catch block and `context = empty`
+      // is never executed — _prepareContext() rejects instead of returning the
+      // empty fallback, making the entire dispatch fail with no user response.
+      try {
+        logger.warn(
+          { conversationId, err: getErrorMessage(ctxErr) },
+          `[context] Context preparation failed — proceeding with minimal context: ${getErrorMessage(ctxErr)}`,
+        );
+      } catch { /* logger must not prevent context fallback */ }
       context = empty;
     }
 
@@ -668,10 +683,17 @@ export class PluginDispatcher {
       this.config = { ...this.config, activePlugin: freshConfig.activePlugin, activeMode: freshConfig.activeMode };
       this._activeMode = freshConfig.activeMode ?? 'coding';
     } catch (configErr: unknown) {
-      logger.warn(
-        { conversationId, err: getErrorMessage(configErr) },
-        `[dispatcher] Config read failed — proceeding with cached config: ${getErrorMessage(configErr)}`,
-      );
+      // Nested try/catch: logger.warn() can throw (pino EPIPE under I/O
+      // pressure).  If unguarded, the throw escapes this catch block and
+      // dispatch() rejects instead of falling through with the cached config —
+      // losing the entire dispatch rather than continuing with the last-known
+      // valid activePlugin/activeMode.
+      try {
+        logger.warn(
+          { conversationId, err: getErrorMessage(configErr) },
+          `[dispatcher] Config read failed — proceeding with cached config: ${getErrorMessage(configErr)}`,
+        );
+      } catch { /* logger must not prevent config fallback */ }
       // Fall through with this.config unchanged — safe because it was valid
       // at construction time or from the last successful read/applyConfig().
     }
@@ -711,10 +733,16 @@ export class PluginDispatcher {
           `Plugin availability (${plugin.name})`,
         );
       } catch (availErr: unknown) {
-        logger.warn(
-          { plugin: plugin.name, err: getErrorMessage(availErr) },
-          `[plugin:${plugin.name}] Availability check failed or timed out — treating as unavailable`,
-        );
+        // Nested try/catch: logger.warn() can throw (pino EPIPE under I/O
+        // pressure).  If unguarded, the throw escapes this catch block and
+        // `available = false` is never executed — the plugin is incorrectly
+        // treated as available, bypassing the fallback chain.
+        try {
+          logger.warn(
+            { plugin: plugin.name, err: getErrorMessage(availErr) },
+            `[plugin:${plugin.name}] Availability check failed or timed out — treating as unavailable`,
+          );
+        } catch { /* logger must not prevent availability fallback */ }
         available = false;
       }
       if (!available) {
@@ -1037,7 +1065,13 @@ export class PluginDispatcher {
           const plugin = this.registry.get(name);
           if (plugin) await fn(plugin, name);
         } catch (err: unknown) {
-          logger.warn({ err, plugin: name }, `[dispatcher] ${operation} failed for plugin "${name}" — continuing cleanup`);
+          // Nested try/catch: logger.warn() can throw (pino EPIPE under I/O
+          // pressure).  If unguarded, the throw escapes this catch block and
+          // propagates out of the Promise.allSettled() callback — causing the
+          // cleanup loop to abort early and leaving some plugins un-cleaned.
+          try {
+            logger.warn({ err, plugin: name }, `[dispatcher] ${operation} failed for plugin "${name}" — continuing cleanup`);
+          } catch { /* logger must not abort the cleanup loop */ }
         }
       }),
     );
