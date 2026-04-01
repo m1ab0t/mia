@@ -83,12 +83,20 @@ export function handleReady(
 ): void {
   const { key, resumedConversationId } = msg;
   setP2PKey(key);
-  ctx.log('success', `P2P swarm started (key: ${key})`);
+  // Wrapped in try/catch: ctx.log() (pino) can throw synchronously under I/O
+  // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+  // skip ctx.resolveReady() — the call that resolves the daemon's P2P startup
+  // Promise.  On first boot this causes the daemon to resolve with success:false
+  // (P2P treated as failed).  On restart it prevents the reconnect-ready timer
+  // from being cancelled, which then kills the new child process and triggers
+  // another restart cycle.  Guarding the logs ensures resolveReady() always
+  // fires regardless of logger health.
+  try { ctx.log('success', `P2P swarm started (key: ${key})`); } catch { /* logger must not prevent resolveReady */ }
 
   if (resumedConversationId) {
     setCurrentConversationId(resumedConversationId);
     setResumedConversationId(resumedConversationId);
-    ctx.log('info', `Resumed conversation: ${resumedConversationId}`);
+    try { ctx.log('info', `Resumed conversation: ${resumedConversationId}`); } catch { /* logger must not prevent resolveReady */ }
   }
 
   if (key) {
@@ -207,7 +215,9 @@ export function handleNewConversation(
 ): void {
   setCurrentConversationId(null);
   resetContextTokens();
-  ctx.log('info', 'New conversation');
+  // Wrapped in try/catch: ctx.log() (pino) can throw under I/O pressure.
+  // State is already updated above — logging failure must never propagate.
+  try { ctx.log('info', 'New conversation'); } catch { /* logger must not throw */ }
 }
 
 export function handleLoadConversation(
@@ -215,7 +225,8 @@ export function handleLoadConversation(
   ctx: HandlerCtx,
 ): void {
   setCurrentConversationId(msg.conversationId);
-  ctx.log('info', `Loading conversation ${msg.conversationId}`);
+  // Wrapped in try/catch: same rationale as handleNewConversation above.
+  try { ctx.log('info', `Loading conversation ${msg.conversationId}`); } catch { /* logger must not throw */ }
 }
 
 export function handlePluginSwitch(
@@ -223,7 +234,9 @@ export function handlePluginSwitch(
   ctx: HandlerCtx,
 ): void {
   const result = ctx.onPluginSwitch(msg.name);
-  ctx.log('info', `Plugin switch to '${msg.name}': ${result.success ? 'ok' : result.error}`);
+  // Wrapped in try/catch: ctx.log() (pino) can throw under I/O pressure.
+  // The switch has already been applied — logging failure must not propagate.
+  try { ctx.log('info', `Plugin switch to '${msg.name}': ${result.success ? 'ok' : result.error}`); } catch { /* logger must not throw */ }
 }
 
 export function handleModeSwitch(
@@ -235,7 +248,8 @@ export function handleModeSwitch(
     // a second ctx.log here would produce a duplicate "Mode switched" line.
     ctx.onModeSwitch(msg.mode);
   } else {
-    ctx.log('warn', `Mode switch to '${msg.mode}' — no handler registered`);
+    // Wrapped in try/catch: ctx.log() (pino) can throw under I/O pressure.
+    try { ctx.log('warn', `Mode switch to '${msg.mode}' — no handler registered`); } catch { /* logger must not throw */ }
   }
 }
 
