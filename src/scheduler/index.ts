@@ -530,7 +530,15 @@ export class Scheduler {
             try { logger.error({ err, taskId: task.id, taskName: task.name }, 'Failed to persist task stats after scheduled run'); } catch { /* logger must not throw */ }
           });
         } catch (error) {
-          logger.error({ err: error, taskId: task.id, taskName: task.name }, 'Scheduled task failed');
+          // Nested try/catch: logger.error() inside a catch block can itself throw
+          // (pino EPIPE, ERR_STREAM_DESTROYED under I/O pressure).  An unguarded
+          // throw here escapes to the outer catch and generates a false-positive
+          // "Cron callback threw outside inner try/catch" CRITICAL error, masking
+          // the actual task failure in logs — the same issue PR #78 fixed for the
+          // skip path, but missed for the execution-failure path.
+          try {
+            logger.error({ err: error, taskId: task.id, taskName: task.name }, 'Scheduled task failed');
+          } catch { /* logger must not mask the original task error */ }
         } finally {
           this.runningTasks.delete(task.id);
         }
