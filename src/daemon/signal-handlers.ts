@@ -55,7 +55,13 @@ export function withSignalGuard(
     void (async () => {
       try {
         if (inProgress) {
-          log('warn', `${name}: already in progress — skipping duplicate signal`);
+          // Guard: log() can throw under I/O pressure (pino EPIPE on a broken
+          // stderr stream).  If we let that exception escape here, the outer
+          // catch would reset inProgress = false even though the original handler
+          // is still awaiting — breaking the reentrancy guarantee and allowing a
+          // concurrent invocation to start a second config reload, plugin switch,
+          // or scheduler reload race.
+          try { log('warn', `${name}: already in progress — skipping duplicate signal`); } catch { /* logger must not corrupt the reentrancy guard */ }
           return;
         }
         inProgress = true;
@@ -63,13 +69,18 @@ export function withSignalGuard(
         try {
           await handler();
         } catch (err: unknown) {
-          log('error', `${name}: failed — ${getErrorMessage(err)}`);
+          // log() can throw here too, but the finally below already resets
+          // inProgress before the exception propagates — so the outer catch's
+          // reset is a harmless redundancy in that path.
+          try { log('error', `${name}: failed — ${getErrorMessage(err)}`); } catch { /* logger must not suppress the finally */ }
         } finally {
           inProgress = false;
         }
       } catch {
-        // Safety net: reset the flag even if log() threw before entering
-        // the inner try block.
+        // Safety net: reset the flag if something unexpected escapes before
+        // inProgress is set to true (e.g. future code added between the guard
+        // check and the assignment).  After guarding both early log() calls
+        // above, this path is not reachable in normal operation.
         inProgress = false;
       }
     })();
