@@ -1393,7 +1393,13 @@ async function main() {
         (sum, { plugin }) => sum + plugin.cleanup(),
         0,
       );
-      if (pruned > 0) log('debug', `Pruned ${pruned} stale plugin task(s)`);
+      // Nested try/catch: log() (pino) can throw under I/O pressure (EPIPE when
+      // stderr is stalled).  Without a guard, a throw here aborts the rest of the
+      // cleanup tick — skipping releaseResultBuffers() and sweepStaleTraces().
+      // releaseResultBuffers() is most critical exactly when I/O pressure is high
+      // (the same condition that makes log() throw), so the guard ensures memory
+      // cleanup always runs regardless of logger health.
+      if (pruned > 0) { try { log('debug', `Pruned ${pruned} stale plugin task(s)`); } catch { /* logger must not skip cleanup */ } }
 
       // Release large result strings from completed tasks (5 min grace period)
       // to free heap memory well before the 1-hour full task prune.
@@ -1401,11 +1407,15 @@ async function main() {
         (sum, { plugin }) => sum + plugin.releaseResultBuffers(),
         0,
       );
-      if (released > 0) log('debug', `Released result buffers from ${released} completed task(s)`);
+      // Nested try/catch: same rationale as the pruned log() guard above.
+      // A throw here would skip sweepStaleTraces() — the hung-dispatch detector.
+      if (released > 0) { try { log('debug', `Released result buffers from ${released} completed task(s)`); } catch { /* logger must not skip cleanup */ } }
 
       // Sweep traces that never completed (hung dispatches)
       const swept = traceLogger.sweepStaleTraces();
-      if (swept > 0) log('warn', `Swept ${swept} stale trace(s) — possible hung dispatch`);
+      // Nested try/catch: a throw here would abort the async pruning operations
+      // below (pruneOldSummaries, pruneDailyLogs) — leaving stale files on disk.
+      if (swept > 0) { try { log('warn', `Swept ${swept} stale trace(s) — possible hung dispatch`); } catch { /* logger must not skip cleanup */ } }
 
       // Prune stale conversation summary cache files (configurable TTL + max-count).
       // Fire-and-forget: the async prune runs in the background and never blocks
