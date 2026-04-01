@@ -518,7 +518,14 @@ export function expandLegacyToolExecutions(messages: StoredMessage[]): StoredMes
           toolExecutions: undefined,
         });
       } catch (err) {
-        logger.debug({ err, msgId: msg.id }, '[P2P] Failed to expand routeInfo — skipping');
+        // Nested try/catch: logger.debug() (pino) can throw synchronously under
+        // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+        // escapes the catch block and aborts the for-loop mid-iteration — all
+        // messages after the current one are silently dropped, and all callers
+        // (sendInitialSyncTo, replayHistory, handleHistoryRequest) receive an
+        // incomplete or empty history.  Guarding ensures the loop always continues
+        // regardless of logger health.
+        try { logger.debug({ err, msgId: msg.id }, '[P2P] Failed to expand routeInfo — skipping'); } catch { /* logger must not abort the loop */ }
       }
     }
 
@@ -568,7 +575,10 @@ export function expandLegacyToolExecutions(messages: StoredMessage[]): StoredMes
           }
         }
       } catch (err) {
-        logger.debug({ err, msgId: msg.id }, '[P2P] Failed to expand toolExecutions — skipping');
+        // Nested try/catch: same rationale as the routeInfo guard above.
+        // A logger throw here would abort the for-loop, causing all remaining
+        // messages to be lost from the history displayed on mobile.
+        try { logger.debug({ err, msgId: msg.id }, '[P2P] Failed to expand toolExecutions — skipping'); } catch { /* logger must not abort the loop */ }
       }
     }
 
@@ -783,7 +793,12 @@ async function handleRenameConversation(
   try {
     const sanitized = sanitizeTitle(title);
     if (!sanitized) {
-      logger.warn(`[P2P] Rejected empty/invalid rename title for ${convId}`);
+      // Nested try/catch: logger.warn() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  Without the guard, the
+      // throw escapes the if-block and is caught by the outer catch — logging
+      // a false-positive "Rename conversation failed" error instead of the
+      // true reason (empty/invalid title) and obscuring the actual failure.
+      try { logger.warn(`[P2P] Rejected empty/invalid rename title for ${convId}`); } catch { /* logger must not prevent the return */ }
       return;
     }
     // Wrapped in withTimeout: renameConversation() calls HyperDB store.get(),
