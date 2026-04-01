@@ -1097,13 +1097,19 @@ export abstract class BaseSpawnPlugin implements CodingPlugin {
       this._guardedHandler(taskId, 'close handler', resolve, () => {
         // The process ran — binary is healthy.  Reset the circuit breaker so
         // future dispatches are not blocked by stale failure counts.
+        // State is reset BEFORE logging: if logger.info() throws (e.g. EPIPE
+        // under I/O pressure), the circuit must still be cleared so the plugin
+        // is not permanently locked out despite a successful spawn.
         if (this._spawnFailureCount > 0) {
-          logger.info(
-            { plugin: this.name, previousFailures: this._spawnFailureCount },
-            `[CircuitBreaker] Spawn succeeded for "${this.name}" — resetting failure count`,
-          );
+          const previousFailures = this._spawnFailureCount;
           this._spawnFailureCount = 0;
           this._circuitOpenedAt = 0;
+          try {
+            logger.info(
+              { plugin: this.name, previousFailures },
+              `[CircuitBreaker] Spawn succeeded for "${this.name}" — resetting failure count`,
+            );
+          } catch { /* logger must not prevent circuit reset */ }
         }
 
         // Check if this was an intentional abort — if so, suppress onError.
