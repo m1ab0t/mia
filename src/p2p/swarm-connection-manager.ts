@@ -355,7 +355,12 @@ class PeerWriteQueue {
 
   enqueue(data: Uint8Array): void {
     if (this.entries.length >= MAX_QUEUE_DEPTH) {
-      logger.warn({ key: this.key }, '[P2P] Write queue full — evicting lagging peer');
+      // Guarded: logger.warn() can throw synchronously under I/O pressure
+      // (pino EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here skips
+      // _evict() — leaving the connection alive with a permanently full queue
+      // that blocks all future writes — and propagates to the caller of
+      // writeToConn(), potentially crashing the P2P agent via uncaughtException.
+      try { logger.warn({ key: this.key }, '[P2P] Write queue full — evicting lagging peer'); } catch { /* logger must not prevent eviction */ }
       this._evict();
       return;
     }
@@ -518,7 +523,12 @@ export function writeToConn(conn: Duplex, data: Uint8Array): void {
     try {
       conn.write(data);
     } catch (err: unknown) {
-      logger.debug({ err }, '[P2P] writeToConn: direct write failed (no queue registered)');
+      // Guarded: logger.debug() can throw synchronously under I/O pressure
+      // (pino EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes
+      // the catch block as a new exception, propagating to writeToConn()'s
+      // callers — many of which lack their own try/catch.  This is the same
+      // guard pattern applied to logger calls in all other catch blocks.
+      try { logger.debug({ err }, '[P2P] writeToConn: direct write failed (no queue registered)'); } catch { /* logger must not throw */ }
     }
   }
 }
@@ -535,7 +545,14 @@ export function enforceAnonCap(): void {
   while (count > MAX_ANON_CONNECTIONS) {
     for (const [key, conn] of connections) {
       if (key.startsWith('anon-')) {
-        logger.debug({ key }, '[P2P] Evicting oldest anonymous connection (LRU cap)');
+        // Guarded: logger.debug() can throw synchronously under I/O pressure
+        // (pino EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here skips
+        // stopKeepalive/destroy/delete — leaking the connection and its timer —
+        // and propagates to the swarm.on('connection') handler which has no
+        // enclosing try/catch for this call.  The uncaughtException handler
+        // then fires, causing the P2P agent to exit and lose all mobile
+        // connectivity for up to 30 s during auto-restart.
+        try { logger.debug({ key }, '[P2P] Evicting oldest anonymous connection (LRU cap)'); } catch { /* logger must not prevent eviction */ }
         // Stop keepalive before destroying so the timer is freed immediately
         // rather than waiting up to KEEPALIVE_INTERVAL_MS for the self-heal.
         stopKeepalive(conn);
@@ -565,7 +582,14 @@ export function sendToAll(message: object): void {
       try {
         conn.write(data);
       } catch (err: unknown) {
-        logger.debug({ key, err }, '[P2P] sendToAll: direct write failed');
+        // Guarded: logger.debug() can throw synchronously under I/O pressure
+        // (pino EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here skips
+        // connections.delete(key), leaving the broken connection permanently in
+        // the map.  Every subsequent sendToAll() will then fail the same way for
+        // this peer — conn.write() throws, logger throws, delete is skipped again
+        // — until the keepalive zombie detector eventually destroys the connection
+        // (up to 30s).  Guarding the logger ensures delete always runs.
+        try { logger.debug({ key, err }, '[P2P] sendToAll: direct write failed'); } catch { /* logger must not prevent cleanup */ }
         connections.delete(key);
       }
     }
