@@ -93,7 +93,12 @@ export async function routeMessage(
     try {
       const peek = JSON.parse(message)
       if (peek && typeof peek.type === 'string' && CONTROL_MSG_TYPES.has(peek.type)) {
-        logger('warn', `Blocked control message '${peek.type}' from reaching plugin dispatcher`)
+        // Nested try/catch: logger() (pino) can throw synchronously under I/O
+        // pressure (EPIPE, ERR_STREAM_DESTROYED).  Without this guard, a throw
+        // here is caught by the OUTER catch{} block (intended only for JSON.parse
+        // failures) — the return is skipped and the control message bypasses this
+        // guard, reaching the plugin dispatcher and potentially corrupting state.
+        try { logger('warn', `Blocked control message '${peek.type}' from reaching plugin dispatcher`) } catch { /* logger must not bypass control-message block */ }
         return
       }
     } catch {
@@ -106,14 +111,22 @@ export async function routeMessage(
     // Slash commands: intercept /command messages from mobile/P2P before plugin dispatch
     const slashResult = await handleSlashCommand(message)
     if (slashResult.handled) {
-      logger('info', `Slash command handled: ${message.substring(0, 60)}`)
+      // Nested try/catch: logger() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // skips sendP2PResponseForConversation() — the mobile never receives
+      // the slash command response and hangs waiting indefinitely.
+      try { logger('info', `Slash command handled: ${message.substring(0, 60)}`) } catch { /* logger must not skip slash-command response */ }
       sendP2PResponseForConversation(slashResult.response ?? '', effectiveConvId)
       return
     }
 
     // Backpressure ceiling: reject immediately if too many dispatches are in flight
     if (activeP2PDispatches >= MAX_CONCURRENT_P2P_DISPATCHES) {
-      logger('warn', `Dispatch rejected — ${activeP2PDispatches} concurrent dispatches at limit (${MAX_CONCURRENT_P2P_DISPATCHES})`)
+      // Nested try/catch: logger() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // skips sendP2PPluginError() — the mobile receives no signal that the
+      // dispatch was rejected and hangs waiting for a response indefinitely.
+      try { logger('warn', `Dispatch rejected — ${activeP2PDispatches} concurrent dispatches at limit (${MAX_CONCURRENT_P2P_DISPATCHES})`) } catch { /* logger must not skip backpressure error */ }
       sendP2PPluginError(
         PluginErrorCode.UNKNOWN,
         `Server busy: ${activeP2PDispatches} dispatches in flight, please retry shortly`,
@@ -124,7 +137,12 @@ export async function routeMessage(
       return
     }
 
-    logger('info', `Routing message from ${source} → plugin (${message.substring(0, 60)})`)
+    // Nested try/catch: logger() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+    // propagates out of routeMessage() before activeP2PDispatches is
+    // incremented — the dispatch never runs and the mobile is left waiting
+    // with no error response.
+    try { logger('info', `Routing message from ${source} → plugin (${message.substring(0, 60)})`) } catch { /* logger must not prevent dispatch */ }
 
     // User message persistence is handled by the P2P agent (storeUserMessage
     // in swarm.ts for P2P sources). Scheduler tasks dispatch directly to the
@@ -162,7 +180,14 @@ export async function routeMessage(
     let toolResultBytes = 0
 
     if (image) {
-      logger('info', `Image attached (${image.mimeType}, ${Math.round(image.data.length / 1024)}KB base64)`)
+      // Nested try/catch: logger() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  This logger call sits AFTER
+      // activeP2PDispatches++ but BEFORE the try/finally that guarantees the
+      // decrement.  An unguarded throw here escapes the try/finally entirely —
+      // activeP2PDispatches is permanently leaked.  After MAX_CONCURRENT_P2P_DISPATCHES
+      // (5) such leaks, every subsequent P2P message is rejected as "Server busy"
+      // for the rest of the daemon's lifetime, completely locking out the mobile.
+      try { logger('info', `Image attached (${image.mimeType}, ${Math.round(image.data.length / 1024)}KB base64)`) } catch { /* logger must not leak activeP2PDispatches counter */ }
     }
 
     let taskId: string
@@ -248,7 +273,13 @@ export async function routeMessage(
       activeP2PDispatches = Math.max(0, activeP2PDispatches - 1)
     }
 
-    logger('info', `Plugin task ${taskId.substring(0, 8)} dispatched for ${source} message`)
+    // Nested try/catch: logger() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  This call is after the
+    // try/finally that decrements activeP2PDispatches — a throw here does
+    // not leak the counter, but it does become an unhandled rejection in
+    // the withRequestId async callback, counting toward the daemon's
+    // 10-rejection exit threshold and risking a crash-restart loop.
+    try { logger('info', `Plugin task ${taskId.substring(0, 8)} dispatched for ${source} message`) } catch { /* logger must not cause unhandled rejection */ }
   })
 }
 
