@@ -792,7 +792,12 @@ async function handleRenameConversation(
     // timeout, a hung write blocks the P2P message handler for this connection
     // indefinitely, freezing all subsequent messages from that peer.
     await withTimeout(renameConversation(convId, sanitized), 5_000, 'handleRenameConversation');
-    logger.debug(`[P2P] Renamed conversation ${convId} to "${sanitized}"`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+    // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+    // skip broadcastConversationList() — mobile UI would show the old conversation
+    // name despite the rename succeeding.  Guarding the log ensures the critical
+    // broadcast always runs regardless of logger health.
+    try { logger.debug(`[P2P] Renamed conversation ${convId} to "${sanitized}"`); } catch { /* logger must not skip broadcast */ }
     await broadcastConversationList(ctx);
   } catch (err: unknown) {
     // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
@@ -884,7 +889,13 @@ async function handleDeleteMultipleConversations(
       // conversation's rows can't freeze the handler indefinitely.  10 s per
       // conversation matches the single-delete handler above.
       await withTimeout(deleteConversation(id), 10_000, `handleDeleteMultipleConversations(${id})`);
-      logger.debug(`[P2P] Deleted conversation: ${id}`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
+      // exit the for loop early — remaining conversations would not be deleted and
+      // the final broadcastConversationList() would be skipped, leaving the mobile
+      // UI out of sync despite a partial delete.  Guarding the log ensures the
+      // loop continues and the broadcast always runs regardless of logger health.
+      try { logger.debug(`[P2P] Deleted conversation: ${id}`); } catch { /* logger must not skip remaining deletions */ }
       if (id === ctx.getCurrentConversationId()) {
         currentDeleted = true;
       }
