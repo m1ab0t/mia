@@ -342,7 +342,11 @@ export async function sendPluginsListTo(conn: Duplex, ctx: MessageHandlerContext
     const info = await cb();
     const data = JSON.stringify({ type: 'plugins', plugins: info.plugins, activePlugin: info.activePlugin }) + '\n';
     writeToConn(conn, b4a.from(data));
-    logger.debug(`[P2P] Sent ${info.plugins.length} plugins to peer (active: ${info.activePlugin})`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes into
+    // the catch below, which logs "Plugin list failed" even though the data was
+    // sent — a false-positive error that pollutes monitoring dashboards.
+    try { logger.debug(`[P2P] Sent ${info.plugins.length} plugins to peer (active: ${info.activePlugin})`); } catch { /* logger must not trigger false error */ }
   } catch (err: unknown) {
     // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
     // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -365,7 +369,11 @@ export async function sendConversationListTo(conn: Duplex, ctx: MessageHandlerCo
       currentConversationId: ctx.getCurrentConversationId(),
     }) + '\n';
     writeToConn(conn, b4a.from(data));
-    logger.debug(`[P2P] Sent ${conversations.length} conversations to peer`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes into
+    // the catch below, which logs "Conversations list failed" even though the data
+    // was sent — a false-positive error that pollutes monitoring dashboards.
+    try { logger.debug(`[P2P] Sent ${conversations.length} conversations to peer`); } catch { /* logger must not trigger false error */ }
   } catch (err: unknown) {
     // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
     // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -453,7 +461,12 @@ export async function sendInitialSyncTo(
   }
 
   writeToConn(conn, b4a.from(JSON.stringify(payload) + '\n'));
-  logger.debug('[P2P] Sent initial_sync bundle to peer');
+  // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under I/O
+  // pressure (EPIPE, ERR_STREAM_DESTROYED).  sendInitialSyncTo() has no try/catch
+  // of its own, so an unguarded throw here propagates to the caller's catch in
+  // swarm-core.ts which logs "Initial sync failed" — a false-positive: the bundle
+  // was already delivered and connection_ready still fires (from the finally block).
+  try { logger.debug('[P2P] Sent initial_sync bundle to peer'); } catch { /* logger must not trigger false error */ }
 }
 
 // ── Broadcast helpers ─────────────────────────────────────────────────
@@ -613,7 +626,11 @@ export async function replayHistory(conn: Duplex, ctx: MessageHandlerContext): P
       hasMore,
     }) + '\n';
     writeToConn(conn, b4a.from(data));
-    logger.debug(`[P2P] Replayed ${messages.length} history messages (${timeline.length} timeline entries) to peer`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes into
+    // the catch below, which logs "History replay failed" even though the data was
+    // sent — a false-positive error that pollutes monitoring dashboards.
+    try { logger.debug(`[P2P] Replayed ${messages.length} history messages (${timeline.length} timeline entries) to peer`); } catch { /* logger must not trigger false error */ }
   } catch (err: unknown) {
     // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
     // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -652,7 +669,11 @@ async function handleHistoryRequest(
       hasMore: result.hasMore,
     }) + '\n';
     writeToConn(conn, b4a.from(data));
-    logger.debug(`[P2P] Sent ${result.messages.length} older messages (${timeline.length} entries, hasMore: ${result.hasMore})`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes into
+    // the catch below, which logs "History request failed" even though the data was
+    // sent — a false-positive error that pollutes monitoring dashboards.
+    try { logger.debug(`[P2P] Sent ${result.messages.length} older messages (${timeline.length} entries, hasMore: ${result.hasMore})`); } catch { /* logger must not trigger false error */ }
   } catch (err: unknown) {
     // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
     // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -684,7 +705,12 @@ async function handleSearchRequest(
     const results = await withTimeout(searchConversations(query.trim(), 20), 10_000, 'handleSearchRequest');
     const data = JSON.stringify({ type: 'search_results', requestId, results }) + '\n';
     writeToConn(conn, b4a.from(data));
-    logger.debug(`[P2P] Search "${query}" → ${results.length} results`);
+    // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under I/O
+    // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here escapes into
+    // the catch below, which ALSO calls writeToConn() — sending the mobile client
+    // a duplicate search_results error frame after it already received the real
+    // results.  The mobile would then show an error for a search that succeeded.
+    try { logger.debug(`[P2P] Search "${query}" → ${results.length} results`); } catch { /* logger must not trigger duplicate response */ }
   } catch (err: unknown) {
     // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
     // pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here would
@@ -1045,7 +1071,14 @@ const controlHandlers = {
         } else {
           writeToConn(conn, b4a.from(JSON.stringify({ type: 'plugin_switched', error: result.error }) + '\n'));
         }
-        logger.debug(`[P2P] Plugin switch to '${msg.name}': ${result.success ? 'ok' : result.error}`);
+        // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+        // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+        // escapes into the catch below, which ALSO calls writeToConn() — sending
+        // the mobile client a duplicate plugin_switched error frame after it already
+        // received either a success broadcast (sendToAll) or a failure writeToConn.
+        // The mobile would show "plugin switch failed" for an operation that succeeded
+        // (or send a duplicate error for one that failed).
+        try { logger.debug(`[P2P] Plugin switch to '${msg.name}': ${result.success ? 'ok' : result.error}`); } catch { /* logger must not trigger duplicate response */ }
       }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
@@ -1063,7 +1096,11 @@ const controlHandlers = {
       if (switchCb) {
         switchCb(msg.mode);
         sendToAll({ type: 'mode_switched', activeMode: msg.mode });
-        logger.debug(`[P2P] Mode switch to '${msg.mode}': ok`);
+        // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+        // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+        // escapes into the catch below, logging "Mode switch failed" even though the
+        // mode was switched successfully — a false-positive error.
+        try { logger.debug(`[P2P] Mode switch to '${msg.mode}': ok`); } catch { /* logger must not trigger false error */ }
       }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
@@ -1115,7 +1152,13 @@ const controlHandlers = {
       );
       const data = JSON.stringify({ type: 'personas', personas, activePersona: active }) + '\n';
       writeToConn(conn, b4a.from(data));
-      logger.debug(`[P2P] Sent ${personas.length} personas to peer (active: ${active})`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which ALSO calls writeToConn() — sending the
+      // mobile client a duplicate personas error frame after the real list was
+      // already delivered.  The mobile would overwrite valid persona data with an
+      // empty error response.
+      try { logger.debug(`[P2P] Sent ${personas.length} personas to peer (active: ${active})`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -1146,7 +1189,13 @@ const controlHandlers = {
         'persona_switch',
       );
       sendToAll({ type: 'persona_switched', activePersona: active });
-      logger.debug(`[P2P] Persona switch to '${active}': ok`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which sends a persona_switched error frame to
+      // the requesting peer — even though sendToAll() already broadcast the success
+      // to all peers (including this one).  The mobile would show "persona switch
+      // failed" for an operation that succeeded.
+      try { logger.debug(`[P2P] Persona switch to '${active}': ok`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -1177,7 +1226,12 @@ const controlHandlers = {
         'persona_create',
       );
       sendToAll({ type: 'persona_created', persona, personas, activePersona: active });
-      logger.debug(`[P2P] Persona created: '${persona.name}'`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which sends a persona_created error frame —
+      // even though sendToAll() already broadcast the success to all peers.  The
+      // mobile would show "persona create failed" for an operation that succeeded.
+      try { logger.debug(`[P2P] Persona created: '${persona.name}'`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -1208,7 +1262,12 @@ const controlHandlers = {
         'persona_update',
       );
       sendToAll({ type: 'persona_updated', persona, personas, activePersona: active });
-      logger.debug(`[P2P] Persona updated: '${persona.name}'`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which sends a persona_updated error frame —
+      // even though sendToAll() already broadcast the success to all peers.  The
+      // mobile would show "persona update failed" for an operation that succeeded.
+      try { logger.debug(`[P2P] Persona updated: '${persona.name}'`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -1238,7 +1297,12 @@ const controlHandlers = {
         'persona_delete',
       );
       sendToAll({ type: 'persona_deleted', name: msg.name, personas, activePersona });
-      logger.debug(`[P2P] Persona deleted: '${msg.name}'`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which sends a persona_deleted error frame —
+      // even though sendToAll() already broadcast the success to all peers.  The
+      // mobile would show "persona delete failed" for an operation that succeeded.
+      try { logger.debug(`[P2P] Persona deleted: '${msg.name}'`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -1268,7 +1332,13 @@ const controlHandlers = {
       } else {
         writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_content', name: msg.name, content }) + '\n'));
       }
-      logger.debug(`[P2P] Sent persona content for '${msg.name}'`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which ALSO calls writeToConn() — sending the
+      // mobile a duplicate persona_content error frame after the real content was
+      // already delivered.  The mobile would overwrite valid persona content with an
+      // error response.
+      try { logger.debug(`[P2P] Sent persona content for '${msg.name}'`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
@@ -1288,7 +1358,13 @@ const controlHandlers = {
       }
       const content = await cb(msg.description);
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_generated', content }) + '\n'));
-      logger.debug(`[P2P] Generated persona from description`);
+      // Wrapped in try/catch: logger.debug() (pino) can throw synchronously under
+      // I/O pressure (EPIPE, ERR_STREAM_DESTROYED).  An unguarded throw here
+      // escapes into the catch below, which ALSO calls writeToConn() — sending the
+      // mobile a duplicate persona_generated error frame after the real content was
+      // already delivered.  The mobile would overwrite the generated persona with an
+      // error response, silently discarding the user's generation result.
+      try { logger.debug(`[P2P] Generated persona from description`); } catch { /* logger must not trigger duplicate response */ }
     } catch (err: unknown) {
       // Nested try/catch: logger.error() (pino) can throw synchronously under I/O
       // pressure (EPIPE, ERR_STREAM_DESTROYED), escaping as a new unhandled rejection
