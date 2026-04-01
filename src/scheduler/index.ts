@@ -491,13 +491,23 @@ export class Scheduler {
             return;
           }
 
-          const skipLevel = task.consecutiveSkips > 3 ? 'warn' : 'info';
-          logger[skipLevel](
-            { taskId: task.id, taskName: task.name, consecutiveSkips: task.consecutiveSkips },
-            task.consecutiveSkips > 3
-              ? 'Scheduled task skipped — previous execution still active (possible stuck task)'
-              : 'Skipping scheduled run — previous execution still active',
-          );
+          // Nested try/catch: logger.warn/info() inside a cron callback can
+          // itself throw (pino EPIPE, ERR_STREAM_DESTROYED under I/O pressure).
+          // Without this guard, the throw escapes to the outer try/catch and
+          // generates a false-positive "Cron callback threw outside inner
+          // try/catch" CRITICAL error on every normal skip — flooding daemon.log
+          // and masking real scheduler errors in monitoring/alerting.
+          // The `return` below always runs because the throw is caught here,
+          // not by the outer catch.
+          try {
+            const skipLevel = task.consecutiveSkips > 3 ? 'warn' : 'info';
+            logger[skipLevel](
+              { taskId: task.id, taskName: task.name, consecutiveSkips: task.consecutiveSkips },
+              task.consecutiveSkips > 3
+                ? 'Scheduled task skipped — previous execution still active (possible stuck task)'
+                : 'Skipping scheduled run — previous execution still active',
+            );
+          } catch { /* logger must not prevent the return */ }
           return;
         }
 
@@ -641,10 +651,16 @@ export class Scheduler {
         try {
           this.startTask(task);
         } catch (err: unknown) {
-          logger.warn(
-            { taskId: id, taskName: task.name, err },
-            '[Scheduler] reload(): startTask threw while re-enabling task — cron job not registered',
-          );
+          // Nested try/catch: logger.warn() inside a catch block can itself
+          // throw (pino EPIPE under I/O pressure).  Without this guard the
+          // throw propagates out of reload(), aborting mid-reconciliation and
+          // leaving subsequent tasks un-reconciled until the next SIGUSR1.
+          try {
+            logger.warn(
+              { taskId: id, taskName: task.name, err },
+              '[Scheduler] reload(): startTask threw while re-enabling task — cron job not registered',
+            );
+          } catch { /* logger must not abort reconciliation */ }
         }
       } else if (task.enabled && !diskTask.enabled) {
         // Newly disabled
@@ -671,10 +687,16 @@ export class Scheduler {
           } catch (err: unknown) {
             // Roll back the tasks.set() to prevent a zombie task entry.
             this.tasks.delete(id);
-            logger.error(
-              { taskId: id, taskName: diskTask.name, cronExpression: diskTask.cronExpression, err },
-              '[Scheduler] reload(): startTask threw for new task — task NOT registered (corrupt cronExpression?)',
-            );
+            // Nested try/catch: logger.error() inside a catch block can itself
+            // throw (pino EPIPE under I/O pressure).  Without this guard the
+            // throw propagates out of reload(), aborting mid-reconciliation and
+            // leaving any remaining new tasks unregistered until the next SIGUSR1.
+            try {
+              logger.error(
+                { taskId: id, taskName: diskTask.name, cronExpression: diskTask.cronExpression, err },
+                '[Scheduler] reload(): startTask threw for new task — task NOT registered (corrupt cronExpression?)',
+              );
+            } catch { /* logger must not abort reconciliation */ }
           }
         }
       }
