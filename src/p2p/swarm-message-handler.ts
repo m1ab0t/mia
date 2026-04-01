@@ -1116,7 +1116,10 @@ const controlHandlers = {
     // but not that it is a safe filename.  Reject names that could escape the
     // personas directory via path traversal (e.g. "../../etc/passwd").
     if (!isValidPersonaName(msg.name)) {
-      logger.warn(`[P2P] persona_switch rejected — invalid name: ${JSON.stringify(msg.name)}`);
+      // Wrapped in try/catch: logger.warn() (pino) can throw synchronously under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED), skipping the writeToConn() below and
+      // leaving the mobile client hanging indefinitely with no error response.
+      try { logger.warn(`[P2P] persona_switch rejected — invalid name: ${JSON.stringify(msg.name)}`); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_switched', error: 'Invalid persona name' }) + '\n'));
       return;
     }
@@ -1141,7 +1144,8 @@ const controlHandlers = {
   },
   persona_create: async (conn, msg, _ctx) => {
     if (!isValidPersonaName(msg.name)) {
-      logger.warn(`[P2P] persona_create rejected — invalid name: ${JSON.stringify(msg.name)}`);
+      // Wrapped in try/catch: same rationale as persona_switch validation guard above.
+      try { logger.warn(`[P2P] persona_create rejected — invalid name: ${JSON.stringify(msg.name)}`); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_created', error: 'Invalid persona name' }) + '\n'));
       return;
     }
@@ -1171,7 +1175,8 @@ const controlHandlers = {
   },
   persona_update: async (conn, msg, _ctx) => {
     if (!isValidPersonaName(msg.name)) {
-      logger.warn(`[P2P] persona_update rejected — invalid name: ${JSON.stringify(msg.name)}`);
+      // Wrapped in try/catch: same rationale as persona_switch validation guard above.
+      try { logger.warn(`[P2P] persona_update rejected — invalid name: ${JSON.stringify(msg.name)}`); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_updated', error: 'Invalid persona name' }) + '\n'));
       return;
     }
@@ -1201,7 +1206,8 @@ const controlHandlers = {
   },
   persona_delete: async (conn, msg, _ctx) => {
     if (!isValidPersonaName(msg.name)) {
-      logger.warn(`[P2P] persona_delete rejected — invalid name: ${JSON.stringify(msg.name)}`);
+      // Wrapped in try/catch: same rationale as persona_switch validation guard above.
+      try { logger.warn(`[P2P] persona_delete rejected — invalid name: ${JSON.stringify(msg.name)}`); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_deleted', error: 'Invalid persona name' }) + '\n'));
       return;
     }
@@ -1230,7 +1236,8 @@ const controlHandlers = {
   },
   persona_get: async (conn, msg, _ctx) => {
     if (!isValidPersonaName(msg.name)) {
-      logger.warn(`[P2P] persona_get rejected — invalid name: ${JSON.stringify(msg.name)}`);
+      // Wrapped in try/catch: same rationale as persona_switch validation guard above.
+      try { logger.warn(`[P2P] persona_get rejected — invalid name: ${JSON.stringify(msg.name)}`); } catch { /* logger must not skip writeToConn */ }
       writeToConn(conn, b4a.from(JSON.stringify({ type: 'persona_content', error: 'Invalid persona name' }) + '\n'));
       return;
     }
