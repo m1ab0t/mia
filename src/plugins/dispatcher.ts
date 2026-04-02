@@ -274,7 +274,11 @@ export class PluginDispatcher {
       try {
         available = await plugin.isAvailable();
       } catch (err: unknown) {
-        logger.info({ plugin: plugin.name, err: getErrorMessage(err) }, `[plugin:${plugin.name}] Availability check failed — treating as unavailable`);
+        // Guard logger: if logger.info() throws (e.g. EPIPE on stderr under I/O
+        // pressure), availabilityCache.set() would be skipped — leaving the
+        // in-flight promise dangling and the plugin incorrectly treated as
+        // unavailable on all subsequent dispatches until cache TTL expires.
+        try { logger.info({ plugin: plugin.name, err: getErrorMessage(err) }, `[plugin:${plugin.name}] Availability check failed — treating as unavailable`); } catch { /* logger must not skip cache write */ }
       }
       this.availabilityCache.set(plugin.name, { available, ts: Date.now() });
       return available;
