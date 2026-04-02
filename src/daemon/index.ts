@@ -124,8 +124,12 @@ import type { PluginMetrics } from './status';
       const msg = reason instanceof Error
         ? `${reason.message}\n${reason.stack}`
         : String(reason);
-      log('error', `Unhandled rejection: ${msg}`);
 
+      // Critical counter update BEFORE log() — log() can throw under I/O
+      // pressure (EPIPE, ERR_STREAM_DESTROYED).  If it fires first and throws,
+      // rejectionTimestamps.push() is skipped, the counter never increments,
+      // and the "10 rejections → graceful restart" safety net never fires even
+      // when the daemon is accumulating state corruption.
       const now = Date.now();
       rejectionTimestamps.push(now);
 
@@ -137,19 +141,28 @@ import type { PluginMetrics } from './status';
         rejectionTimestamps.shift();
       }
 
-      if (rejectionTimestamps.length >= REJECTION_THRESHOLD) {
-        log(
-          'error',
-          `CRITICAL: ${REJECTION_THRESHOLD}+ unhandled rejections in ` +
-          `${REJECTION_WINDOW_MS / 60_000}min — daemon state may be corrupt, exiting for restart`,
-        );
+      const atThreshold = rejectionTimestamps.length >= REJECTION_THRESHOLD;
+
+      // Log after counter update so a throw here doesn't block the check below.
+      try { log('error', `Unhandled rejection: ${msg}`); } catch { /* logger must not prevent threshold check */ }
+
+      if (atThreshold) {
+        // Critical cleanup BEFORE log() for the same reason: if log() throws,
+        // the cleanup and exit must still run.
+        try { removePidFile(); } catch { /* best-effort */ }
+        try { removeStatusFile(); } catch { /* best-effort */ }
+        try { removeReadyFile(); } catch { /* best-effort */ }
+        try {
+          log(
+            'error',
+            `CRITICAL: ${REJECTION_THRESHOLD}+ unhandled rejections in ` +
+            `${REJECTION_WINDOW_MS / 60_000}min — daemon state may be corrupt, exiting for restart`,
+          );
+        } catch { /* best-effort */ }
         // Clean up state files so `mia start` can launch a fresh daemon.
         // Without this, the stale PID file makes the daemon un-restartable —
         // `mia start` sees the dead PID and either refuses to start or tries
         // to kill a random process that reused the PID number.
-        try { removePidFile(); } catch { /* best-effort */ }
-        try { removeStatusFile(); } catch { /* best-effort */ }
-        try { removeReadyFile(); } catch { /* best-effort */ }
         process.exit(1);
       }
     } catch {
