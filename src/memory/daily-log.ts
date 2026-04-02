@@ -200,7 +200,7 @@ export async function appendDailyLog(entry: string): Promise<void> {
     );
     logger.debug({ path: logPath }, '[DailyLog] Appended entry');
   } catch (err: unknown) {
-    logger.warn({ err }, '[DailyLog] Failed to append daily log');
+    try { logger.warn({ err }, '[DailyLog] Failed to append daily log'); } catch {}
     throw err;
   }
 }

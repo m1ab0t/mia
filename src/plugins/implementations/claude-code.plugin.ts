@@ -112,7 +112,7 @@ export class ClaudeCodePlugin extends BaseSpawnPlugin {
       // rather than crashing the dispatch entirely.  The user will get a response
       // without the image context, which is better than an error.
       const msg = getErrorMessage(err);
-      logger.warn({ err: msg }, `[ClaudeCodePlugin] Failed to save image attachment to temp file — proceeding without image: ${msg}`);
+      try { logger.warn({ err: msg }, `[ClaudeCodePlugin] Failed to save image attachment to temp file — proceeding without image: ${msg}`); } catch {}
       return { ...options, image: undefined };
     }
   }
