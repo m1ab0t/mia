@@ -932,10 +932,19 @@ async function main() {
   getScheduler().setStuckTaskHandler((taskId) => {
     const convId = schedulerConvIds.get(taskId);
     if (!convId) {
-      log('warn', `Scheduler: stuck-task abort for "${taskId}" but no active conversation found`);
+      // Nested try/catch: log() (pino) can throw synchronously under I/O pressure
+      // (EPIPE, ERR_STREAM_DESTROYED).  Without this guard, a throw here would
+      // escape the if-block — skipping the `return` — and fall through to the
+      // abort path below with convId = undefined, calling
+      // pluginDispatcher.abortConversation(undefined) with no valid conversation.
+      try { log('warn', `Scheduler: stuck-task abort for "${taskId}" but no active conversation found`); } catch { /* logger must not prevent early return */ }
       return;
     }
-    log('error', `Scheduler: force-aborting stuck dispatch for task "${taskId}" (conv: ${convId})`);
+    // Critical actions BEFORE logging: if log() throws (pino EPIPE under I/O
+    // pressure), schedulerConvIds.delete() and abortConversation() would be
+    // skipped — leaving the conversation ID in the map and the stuck dispatch
+    // permanently hung.  Performing cleanup first guarantees both actions run
+    // regardless of whether pino succeeds.
     schedulerConvIds.delete(taskId);
     // Fire-and-forget — the abort is best-effort. If it fails, the plugin's
     // own timeout will eventually kill the process.
@@ -945,6 +954,7 @@ async function main() {
       // that counts toward the daemon's 10-rejection exit threshold.
       try { log('warn', `Scheduler: abortConversation failed for "${convId}": ${getErrorMessage(err)}`); } catch { /* logger must not throw */ }
     });
+    try { log('error', `Scheduler: force-aborting stuck dispatch for task "${taskId}" (conv: ${convId})`); } catch { /* logger must not prevent abort */ }
   });
 
   // ── Restart callback ───────────────────────────────────────────────
